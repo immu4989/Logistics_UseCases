@@ -1,100 +1,172 @@
-# Delivery commit prediction
+# 📦 Delivery Commit Prediction
 
-Predict which parcels will miss their delivery commitment, and explain why.
+**Know which parcels will break their delivery promise — while there's still time to save them.**
 
-An end-to-end, open reference pipeline for on-time-performance (OTP) modeling in parcel
-logistics: raw shipment extract → cleaning → feature engineering → training → evaluation →
-SHAP driver analysis. Built from patterns that held up in production carrier ML, released
-here so any shipping company can adapt them without starting from a blank notebook.
+![Python](https://img.shields.io/badge/python-3.10%2B-blue)
+![License](https://img.shields.io/badge/license-Apache--2.0-green)
+![Models](https://img.shields.io/badge/models-XGBoost%20%2B%20logistic-orange)
+![Explainability](https://img.shields.io/badge/explainability-SHAP%2C%20tested-purple)
+![Lint](https://img.shields.io/badge/lint-ruff-red)
 
-```
+Every parcel network fights the same fire: a small fraction of shipments miss their
+committed delivery date, and by the time anyone knows which ones, it's too late to act.
+This project turns that around. It ranks tomorrow's shipments by miss risk **at induction
+time** (the moment a package enters the network), so operations can reroute, upgrade the
+service, or warn the customer before the promise breaks.
+
+One command runs the entire journey, no data downloads, ~1 minute on a laptop:
+
+```bash
 pip install -e .
 delivery-commit all
 ```
 
-That one command generates 60k synthetic shipments (deliberately messy, like a real
-extract), cleans them, trains a logistic baseline and an XGBoost model on a time-based
-split, evaluates on the held-out period, and writes a SHAP report of what drives misses.
-No proprietary data, no downloads, ~1 minute on a laptop.
+```mermaid
+flowchart LR
+    A[("Raw extract<br/>60k shipments,<br/>deliberately messy")] --> B["Audited<br/>cleaning"]
+    B --> C["Feature<br/>engineering"]
+    C --> D["Time-based<br/>split"]
+    D --> E["Logistic baseline<br/>+ XGBoost"]
+    E --> F["Evaluation<br/>PR-AUC · lift · calibration"]
+    E --> G["SHAP driver<br/>analysis"]
+    F --> H[("artifacts/reports/<br/>metrics, plots,<br/>per-shipment explanations")]
+    G --> H
+```
 
-## Why this exists
+## 🎯 The headline numbers
 
-Every parcel network fights the same fire: a small fraction of shipments miss their
-committed delivery date, and by the time you know which ones, it is too late to act.
-A model that ranks tomorrow's shipments by miss risk turns that into an operations lever:
-reroute, upgrade the service, or notify the customer before the promise breaks.
+Held-out final month, ~14% base miss rate. Nothing here was tuned on the test period.
 
-The modeling itself is not exotic. What is hard to find in the open is a complete,
-honest treatment of the parts that decide whether the model survives contact with
-operations: label leakage, time-based validation, calibration, and explanations an
-ops manager will accept. That is what this repo tries to demonstrate.
+| | Logistic baseline | XGBoost |
+|---|---:|---:|
+| PR-AUC | **0.466** | 0.456 |
+| ROC-AUC | **0.814** | 0.811 |
+| Top-decile lift | 3.6x | 3.6x |
+| Recall @ 10% flagged | 36.2% | 35.7% |
 
-## Results (synthetic dataset, held-out final month)
+Read that top row twice: the linear baseline *wins*. That's not a bug, it's the point —
+see [Why the baseline is load-bearing](#-design-decisions-that-make-or-break-otp-models).
 
-| Model | PR-AUC | ROC-AUC | Top-decile lift | Recall @ 10% flagged |
-|---|---|---|---|---|
-| Logistic baseline | 0.466 | 0.814 | 3.6x | 36.2% |
-| XGBoost | 0.456 | 0.811 | 3.6x | 35.7% |
-
-Base miss rate in the test period is ~14%. The riskiest decile of shipments carries
-3.6x the base miss rate, and flagging the top 10% catches over a third of all misses,
-which is the number that decides whether a proactive-intervention program pays for itself.
+The decile chart is the one that decides whether a proactive-intervention program pays
+for itself. The riskiest 10% of shipments miss at **52%** (3.6x the base rate), and the
+top three deciles together capture **71% of all misses**:
 
 ![Lift by risk decile](docs/img/lift_by_decile.png)
 
-Predicted probabilities are calibrated out of the box, because we deliberately do not
-reweight classes (see design notes below). When the model says 30%, it misses about
-30% of the time:
+And when the model says 30%, it means 30%. Probabilities are honest out of the box
+because we refuse to reweight classes (details below):
 
 ![Calibration](docs/img/calibration.png)
 
-## The SHAP report, checked against ground truth
+## 🔍 What actually drives missed commitments
 
-The synthetic generator has a documented causal process
-([synthetic.py](src/delivery_commit/synthetic.py)): hub congestion, destination weather,
-late pickup, peak surges and lane distance drive misses, while declared value, package
-weight and signature flags are planted noise. The point of generating data this way is
-that the explainability layer can be *tested*, not just admired. The test suite asserts
-that SHAP's driver ranking recovers the real drivers and does not promote the noise
-features, so a refactor that silently breaks explanations fails CI.
+This is the money chart for the morning ops call. Each dot is a shipment; red means the
+feature value was high. Bad destination weather, long lanes, peak surges and congested
+hubs push shipments right (toward missing); short lanes and clear skies pull them left:
 
 ![SHAP summary](docs/img/shap_summary.png)
 
-The pipeline also writes a per-shipment explanation
-(`artifacts/reports/example_shipment.md`) in the shape an ops team would see next to a
-flagged package, plus `driver_ranking.csv` with one-hot columns re-aggregated back to
-operational levers.
+Grouped back to operational levers (one-hot columns re-aggregated), the global ranking:
 
-## Running on real data (Olist)
+| Rank | Driver | Share of model explanation | |
+|---:|---|---:|---|
+| 1 | Destination weather severity | 17.3% | `█████████████████` |
+| 2 | Lane distance | 14.8% | `███████████████` |
+| 3 | Peak-season surge | 12.7% | `█████████████` |
+| 4 | Miles per promised day (slack) | 10.9% | `███████████` |
+| 5 | Total hub congestion | 8.9% | `█████████` |
+| 6 | Origin hub congestion | 5.5% | `██████` |
+| 7 | Rural destination | 4.5% | `████` |
+| 8 | Route stop density | 4.3% | `████` |
+| 9 | Pickup minutes after cutoff | 4.3% | `████` |
+| 10 | Destination type | 4.0% | `████` |
+
+And the sanity check that makes this ranking trustworthy: the generator plants known
+noise features, and the model correctly buries them.
+
+| Planted noise feature | Share of model explanation |
+|---|---:|
+| Declared value | 0.4% |
+| Package weight | 0.3% |
+| Signature required | 0.06% |
+
+### Dependence plots: the shape of each risk factor
+
+SHAP doesn't just rank drivers, it shows their functional form. Weather risk climbs
+step-by-step with severity; distance risk is flat until ~800 miles and then climbs
+steadily — exactly the "more legs, more chances to slip" behavior a network operator
+would predict:
+
+| Weather severity | Lane distance |
+|---|---|
+| ![Weather dependence](docs/img/shap_dependence_dest_weather_severity.png) | ![Distance dependence](docs/img/shap_dependence_distance_miles.png) |
+
+### From global drivers to one flagged package
+
+The pipeline also writes the explanation an ops screen would show next to a flagged
+shipment (`artifacts/reports/example_shipment.md`). A real example from this run,
+predicted miss probability **90%**:
+
+| Driver | Value | Contribution to risk (log-odds) |
+|---|---:|---:|
+| Destination weather severity | 3 (severe) | +1.06 |
+| Lane distance | 2,150 mi | +0.66 |
+| Peak season | yes | +0.56 |
+| Miles per promised day | 2,150 | +0.47 |
+| Total hub congestion | 1.27 / 2.0 | +0.43 |
+| Pickup after cutoff | +15.8 min | +0.26 |
+
+A severe-weather destination, 2,150 miles away, during peak, through congested hubs,
+picked up late. Nobody needs a data science degree to believe this flag — which is
+precisely what makes the score actionable.
+
+### The trick that makes the SHAP report testable
+
+Most explainability demos ask you to admire a chart. Here, the synthetic generator
+([synthetic.py](src/delivery_commit/synthetic.py)) has a *documented causal process* —
+the true coefficients for congestion, weather, late pickup, peak and distance are right
+there in the code, alongside deliberately planted noise (declared value, weight,
+signature flags). The test suite asserts SHAP recovers the real drivers and buries the
+noise. If a refactor silently breaks explanations, **CI fails**. When you adapt this to
+your own data, keep the synthetic harness: it's your regression test for the whole
+explanation stack.
+
+## 🚚 Run it on real data (Olist)
 
 The repo includes an adapter for the public
-[Olist Brazilian e-commerce dataset](https://www.kaggle.com/datasets/olistbr/brazilian-ecommerce)
-(~100k real orders with both a promised and an actual delivery date, so the miss label
-is real):
+[Olist Brazilian e-commerce dataset](https://www.kaggle.com/datasets/olistbr/brazilian-ecommerce):
+~100k real orders with both a promised and an actual delivery date, so the miss label is
+real, not simulated.
 
-```
+```bash
 kaggle datasets download -d olistbr/brazilian-ecommerce -p data/olist --unzip
 delivery-commit all --source olist --olist-dir data/olist
 ```
 
-[olist.py](src/delivery_commit/olist.py) is intentionally the template to copy when you write
-the adapter for your own company's data: it maps what Olist has onto the canonical
-schema, fills what it lacks (hub telemetry, weather) with neutral constants, and the
-rest of the pipeline runs unchanged.
+[olist.py](src/delivery_commit/olist.py) is intentionally the template to copy when you
+write the adapter for your own company's data: it maps what Olist has onto the canonical
+schema, fills what it lacks (hub telemetry, weather) with neutral constants, and the rest
+of the pipeline runs unchanged.
 
-## Adapting to your own shipment data
+## 🏭 Adapting to your own shipment data
 
 1. Produce a DataFrame with the canonical columns in
-   [schema.py](src/delivery_commit/schema.py). Only three are truly required to be meaningful:
-   a shipment id, a ship date, and the `missed_commit` label. Every feature column you
-   can populate improves the model; anything you can't, fill with a neutral constant.
+   [schema.py](src/delivery_commit/schema.py). Only three are truly required to be
+   meaningful: a shipment id, a ship date, and the `missed_commit` label. Every feature
+   you can populate improves the model; anything you can't, fill with a neutral constant.
 2. **Respect induction time.** Every feature must be knowable when the package enters
    your network. Scan counts, dwell times and exception codes accumulated *during*
    transit predict lateness brilliantly and uselessly; they are how OTP models leak.
-3. Run `delivery-commit all` and read `artifacts/reports/`. Then score new shipments with
-   `delivery-commit score --input tomorrow.csv`.
+3. Run `delivery-commit all`, read `artifacts/reports/`, then score new shipments:
 
-## Design notes
+```bash
+delivery-commit score --input tomorrow.csv
+```
+
+## 🧠 Design decisions that make or break OTP models
+
+These four choices are where delivery-prediction projects quietly die. Each one here is
+encoded in the pipeline, not just documented.
 
 **Time-based split, never random.** Shipments from the same lane and day are heavily
 correlated. A random split leaks future operating conditions into training and inflates
@@ -102,26 +174,26 @@ offline metrics that then evaporate in deployment. Training uses the first ~80% 
 dates; everything after the cutoff is held out.
 
 **No class reweighting at ~10% positives.** `scale_pos_weight` and friends buy nothing
-for ranking metrics at this imbalance, and they wreck calibration: early versions of
-this pipeline told ops "80% risk" for shipments that missed 30% of the time. If your
-miss rate is far rarer (<1–2%), reweight for trainability and recalibrate on a held-out
-slice before anyone consumes the probabilities.
+for ranking at this imbalance, and they wreck calibration. An early version of this
+pipeline told ops "80% risk" for shipments that missed 30% of the time. If your miss
+rate is far rarer (<1–2%), reweight for trainability and recalibrate on a held-out slice
+before anyone consumes the probabilities.
 
-**The baseline is load-bearing.** On this dataset the logistic baseline ties XGBoost,
-because the synthetic generative process is nearly additive once the features are
-engineered well. That is the honest general lesson: gradient boosting earns its keep on
-the messy interactions of real operational data, and if it cannot beat your linear
-baseline, ship the linear model. The baseline exists to force that conversation.
+**The baseline is load-bearing.** On this dataset logistic regression edges out XGBoost,
+because once the features are engineered well the synthetic process is nearly additive.
+That's the honest general lesson: gradient boosting earns its keep on the messy
+interactions of real operational data, and if it can't beat your linear baseline, ship
+the linear model. The baseline exists to force that conversation.
 
-**Missingness is signal.** Cleaning imputes medians but keeps `__was_missing` flags.
-A hub too overwhelmed to report congestion is probably congested; on the synthetic data
-the missingness flag for weather shows up in the SHAP report exactly as designed.
+**Missingness is signal, and cleaning is audited.** Imputation keeps `__was_missing`
+flags (a hub too overwhelmed to report congestion is probably congested — the weather
+missingness flag shows up in the SHAP beeswarm exactly as designed). Every cleaning step
+logs how many rows it touched (`cleaning_report.csv`); in production, alert when a
+step's touch-count jumps, because upstream schema drift is the number-one silent model
+killer.
 
-**Cleaning is audited, not silent.** Every cleaning step logs how many rows it touched
-(`cleaning_report.csv`). In production, alert when a step's touch-count jumps; upstream
-schema drift is the number-one silent model killer.
-
-## Repository layout
+<details>
+<summary>📁 Repository layout</summary>
 
 ```
 src/delivery_commit/
@@ -137,7 +209,9 @@ src/delivery_commit/
 tests/           end-to-end tests incl. "SHAP recovers the true drivers"
 ```
 
-## Contributing
+</details>
+
+## 🤝 Contributing
 
 Issues and PRs welcome, especially adapters for other public logistics datasets,
 alternative model families, and intervention-cost analysis (turning risk scores into
