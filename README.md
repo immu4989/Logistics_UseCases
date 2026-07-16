@@ -5,7 +5,7 @@
 [![CI](https://github.com/immu4989/Logistics_UseCases/actions/workflows/ci.yml/badge.svg)](https://github.com/immu4989/Logistics_UseCases/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![License](https://img.shields.io/badge/license-Apache--2.0-green)
-![Use cases](https://img.shields.io/badge/use%20cases-4%20ready-brightgreen)
+![Use cases](https://img.shields.io/badge/use%20cases-7%20ready-brightgreen)
 ![Explainability](https://img.shields.io/badge/every%20model-explained%20%26%20tested-purple)
 
 Each use case in this repo is a complete, self-contained project: dataset story, audited
@@ -26,6 +26,10 @@ it.
 | [⏱️ eta-regression](eta-regression/) | When will each package *actually* arrive, and what transit time can you promise and keep 9 times out of 10? | ✅ Ready |
 | [🎛️ intervention-optimization](intervention-optimization/) | Given miss-risk scores and a daily ops budget, which shipments get rerouted, upgraded, or flagged to the customer? | ✅ Ready |
 | [📡 network-anomaly-detection](network-anomaly-detection/) | Which lanes are drifting toward trouble weeks before the monthly OTP report notices? | ✅ Ready |
+| [📈 volume-forecasting](volume-forecasting/) | How many parcels hit each hub tomorrow and through the peak, so you can staff before the wave? | ✅ Ready |
+| [🗺️ route-optimization](route-optimization/) | Same stops, same trucks: how many miles is your zone-based routing leaving on the table? | ✅ Ready |
+| [💰 dynamic-pricing](dynamic-pricing/) | What should this freight quote cost, priced by each lane's own elasticity instead of cost-plus? | ✅ Ready |
+| 🔧 predictive-maintenance | Which vehicles break down in the next two weeks, with enough warning to fix on a schedule? | 🔨 In progress |
 
 Every use case runs end-to-end on synthetic data with one command, in about a minute,
 with no proprietary data and no downloads:
@@ -110,6 +114,46 @@ incident card with the estimated cost in extra misses per week.
 ![Step drift caught in days](network-anomaly-detection/docs/img/example_step_lane.png)
 
 Full write-up: [network-anomaly-detection/README.md](network-anomaly-detection/README.md)
+
+## 📈 Volume forecasting
+
+Modeled on the forecasting programs at FedEx, DHL and Amazon: daily inbound volume for
+15 hubs with holidays, promo shocks and a December peak, forecast as P10/P50/P80/P90
+quantiles with split-conformal calibration. XGBoost lands at **7.5% WAPE vs 16.2%** for
+the same-weekday-last-week rule every ops floor uses, and stays at 7.1% through the peak
+where the naive rule runs chronically 9% behind the ramp. Staffing to P80 instead of the
+point forecast cuts understaffed days from **54% to 19%**:
+
+![December peak overlay](volume-forecasting/docs/img/december_overlay.png)
+
+Full write-up: [volume-forecasting/README.md](volume-forecasting/README.md)
+
+## 🗺️ Route optimization
+
+A dependency-free Clarke-Wright + 2-opt router (inspired by UPS ORION and FedEx DRO)
+against the honest comparator: package-balanced fixed zones, which is how most depots
+actually run. Same 592 stops, same 7 trucks, same constraints: **8.1% fewer miles,
+about $17,000/year per depot**, with a dispatch-sheet rationale per route and a lower
+bound for context. Bonus finding: naive global nearest-neighbor can *lose* to
+well-balanced zones — greedy isn't optimization.
+
+![Route maps](route-optimization/docs/img/route_maps.png)
+
+Full write-up: [route-optimization/README.md](route-optimization/README.md)
+
+## 💰 Dynamic pricing
+
+Cost-plus pricing is a subsidy paid to your most price-insensitive customers. A monotone
+XGBoost acceptance model learns each segment's demand curve from historical quotes, then
+guardrailed price optimization picks the margin-maximizing price per quote. Evaluated
+counterfactually against documented ground-truth elasticities: **+32% expected margin
+over cost-plus, capturing 97% of the oracle bound**, with the uplift concentrated in the
+over-charged elastic spot segment. The learned demand curves are validated against the
+generator's true curves in CI:
+
+![Demand curves: true vs learned](dynamic-pricing/docs/img/elasticity_curves.png)
+
+Full write-up: [dynamic-pricing/README.md](dynamic-pricing/README.md)
 
 ## Repository conventions
 
