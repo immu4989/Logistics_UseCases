@@ -5,7 +5,7 @@
 [![CI](https://github.com/immu4989/Logistics_UseCases/actions/workflows/ci.yml/badge.svg)](https://github.com/immu4989/Logistics_UseCases/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![License](https://img.shields.io/badge/license-Apache--2.0-green)
-![Use cases](https://img.shields.io/badge/use%20cases-8%20ready-brightgreen)
+![Use cases](https://img.shields.io/badge/use%20cases-12%20ready-brightgreen)
 ![Explainability](https://img.shields.io/badge/every%20model-explained%20%26%20tested-purple)
 
 Each use case in this repo is a complete, self-contained project: dataset story, audited
@@ -30,6 +30,10 @@ and **watch** the network and the fleet for drift before the monthly report sees
 | [🗺️ route-optimization](route-optimization/) | Same stops, same trucks: how many miles is your zone-based routing leaving on the table? | ✅ Ready |
 | [💰 dynamic-pricing](dynamic-pricing/) | What should this freight quote cost, priced by each lane's own elasticity instead of cost-plus? | ✅ Ready |
 | [🔧 predictive-maintenance](predictive-maintenance/) | Which vehicles break down in the next two weeks, with enough warning to fix on a schedule? | ✅ Ready |
+| [🏠 address-resolution](address-resolution/) | Which typed address matches which real delivery point, and when should nobody auto-match? | ✅ Ready |
+| [↩️ returns-prediction](returns-prediction/) | Which orders come back, why, and which returns are worth preventing before the parcel ships? | ✅ Ready |
+| [🚂 capacity-planning](capacity-planning/) | How many linehaul trailers do you book a week ahead, priced by the cost of guessing wrong in each direction? | ✅ Ready |
+| [🎫 exception-triage](exception-triage/) | Which resolution team should each stuck-shipment ticket go to, and which tickets can route themselves? | ✅ Ready |
 
 Every use case runs end-to-end on synthetic data with one command, in about a minute,
 with no proprietary data and no downloads:
@@ -168,6 +172,61 @@ economics. SHAP work-order cards name the sensors behind every flag:
 ![Flagged 14 days before failure](predictive-maintenance/docs/img/vehicle_trace.png)
 
 Full write-up: [predictive-maintenance/README.md](predictive-maintenance/README.md)
+
+## 🏠 Address resolution
+
+The most expensive address is the one you deliver to confidently and wrongly. Modeled on
+Amazon's delivery-point resolution work: a block → score → accept-or-review pipeline over
+a corruption-laddered synthetic city (typos, abbreviation variants, dropped units,
+transposed digits). The scorer auto-matches **83.8% of labels at 99.66% precision** and
+routes 98.8% of true no-matches to human review; the no-reject fuzzy matcher it replaces
+delivers **1,925 wrong doors per 10k**. A logistic scorer on purpose: every match
+decision explains itself in the review-queue UI.
+
+![Precision vs coverage](address-resolution/docs/img/precision_coverage.png)
+
+Full write-up: [address-resolution/README.md](address-resolution/README.md)
+
+## ↩️ Returns prediction
+
+A return is a shipment you pay for twice. Order-time-only features (bracket-buying,
+discount depth, causal customer history — delivery lateness drives the label but is
+post-ship, so it's excluded by whitelist and test), orders ranked by **expected return
+cost** rather than raw probability, because a 60% risk on a $200 bracket order outranks
+an 80% risk on a $15 tee. The top decile carries 36% of all return spend, and a $0.30
+fit-assistant intervention on the flagged apparel orders returns **9.9x ROI**.
+
+![Expected-cost decile lift](returns-prediction/docs/img/lift_by_expected_cost_decile.png)
+
+Full write-up: [returns-prediction/README.md](returns-prediction/README.md)
+
+## 🚂 Capacity planning
+
+Every planner books trailers by habit; the newsvendor fractile is the habit, priced.
+Quantile demand forecasts feed the critical-fractile decision (q* = Cu/(Cu+Co) ≈ 0.46 at
+base costs), evaluated against 200 paired demand replications: **$462k / 2.5% cheaper
+than book-last-year over 16 test weeks, within 1.3% of the oracle**. The counterintuitive
+part the README derives step by step: the optimal policy books *fewer* trailers than the
+mean forecast, because an empty trailer costs more than a spot cover — and when spot
+prices spike, the fractile moves and the method adapts where the habit can't.
+
+![Booked vs realized on a growing lane](capacity-planning/docs/img/lane_money_chart.png)
+
+Full write-up: [capacity-planning/README.md](capacity-planning/README.md)
+
+## 🎫 Exception triage
+
+Misrouting a ticket doesn't fail loudly, it just adds three days. A multiclass XGBoost
+router versus an honestly-written rules baseline (the comparator earns the model its
+job): **78.5% vs 61.8% accuracy**, evaluated in cost-weighted delay-days, where the
+logistic model beats the rules on accuracy yet loses on cost. The product is the
+confidence gate, not full automation: **auto-route 46.7% of tickets at 97% accuracy**
+and reserve humans for the tickets that need them. Modeled on FedEx's stated direction
+of AI agents across half its operational workflows.
+
+![Automation curve](exception-triage/docs/img/automation_curve.png)
+
+Full write-up: [exception-triage/README.md](exception-triage/README.md)
 
 ## Repository conventions
 
