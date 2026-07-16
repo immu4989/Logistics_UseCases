@@ -39,11 +39,12 @@ pip install -e .
 ## 📦 Delivery commit prediction
 
 Ranks shipments by risk of missing the committed delivery date using only information
-available at induction time, then explains every score. Includes an adapter for the
-public Olist dataset (~100k real orders with real promised-vs-actual delivery dates).
-On the held-out final month: **ROC-AUC 0.81**, the riskiest decile misses at **3.6x**
-the base rate, flagging the top 10% catches **36% of all misses**, and the probabilities
-are calibrated (30% means 30%).
+available at induction time, then explains every score. On the held-out final month:
+**ROC-AUC 0.81**, the riskiest decile misses at **3.6x** the base rate, flagging the
+top 10% catches **36% of all misses**, and the probabilities are calibrated (30% means
+30%). Validated on the real Olist dataset too (96k orders, ROC-AUC 0.75, 3.9x lift) —
+including a mid-test regime shift from Brazil's 2018 truckers' strike that breaks the
+tree model and proves why the linear baseline is load-bearing.
 
 The SHAP driver analysis reads like an operations briefing, and it's asserted in CI
 against the synthetic generator's documented ground truth — planted noise features land

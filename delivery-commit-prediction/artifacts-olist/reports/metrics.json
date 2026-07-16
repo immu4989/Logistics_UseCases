@@ -1,0 +1,28 @@
+{
+  "logistic_baseline": {
+    "pr_auc": 0.22029495330691035,
+    "roc_auc": 0.746445406709055,
+    "brier": 0.04801378571681628,
+    "base_miss_rate": 0.052948504983388704,
+    "flag_frac": 0.1,
+    "flag_threshold": 0.15532686710046112,
+    "precision_at_flag": 0.20653866113129216,
+    "recall_at_flag": 0.39019607843137255,
+    "top_decile_lift": 3.9027711603852344,
+    "top_2_decile_miss_capture": 0.5794117647058824
+  },
+  "xgboost": {
+    "pr_auc": 0.05676504186762939,
+    "roc_auc": 0.5392683224353104,
+    "brier": 0.051792971789836884,
+    "base_miss_rate": 0.052948504983388704,
+    "flag_frac": 0.1,
+    "flag_threshold": 0.11828834563493729,
+    "precision_at_flag": 0.050750906266183324,
+    "recall_at_flag": 0.09607843137254903,
+    "top_decile_lift": 0.9609838535621934,
+    "top_2_decile_miss_capture": 0.2019607843137255
+  },
+  "test_period_start": "2018-05-26",
+  "n_test": 19264
+}

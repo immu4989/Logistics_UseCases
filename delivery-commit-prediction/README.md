@@ -148,6 +148,40 @@ write the adapter for your own company's data: it maps what Olist has onto the c
 schema, fills what it lacks (hub telemetry, weather) with neutral constants, and the rest
 of the pipeline runs unchanged.
 
+### Olist results: 96k real orders, and a regime shift with a lesson in it
+
+On the held-out final period (base late rate 5.3%), the logistic baseline delivers a
+usable ranking from purchase-time features alone:
+
+| Logistic baseline on Olist | Value |
+|---|---:|
+| ROC-AUC | 0.746 |
+| PR-AUC | 0.220 |
+| Top-decile lift | 3.9x |
+| Top-2-decile miss capture | 58% |
+| Recall @ 10% flagged | 39% |
+
+XGBoost, which ties the baseline on synthetic data, **collapses to near-chance here**
+(ROC-AUC 0.54 as shipped; heavier regularization drives it *below* chance). The reason
+is visible in one chart:
+
+![Olist regime shift](docs/img/olist_monthly_miss_rate.png)
+
+Brazil's May 2018 truckers' strike sits right at the train/test boundary, and Olist
+responded by inflating its promised delivery windows: the monthly late rate crashes from
+21% (March) to 1.4% (June). Feature-label relationships literally inverted — before the
+strike a long promised window marked a risky long-haul order; after it, a long window
+meant a padded, safe promise. A linear model extrapolates its directional coefficients
+through that shift and keeps ranking usefully. Trees cannot rank beyond their fitted
+split boundaries, and their memorized rate levels were not just stale but backwards.
+
+Three takeaways worth more than the metrics themselves: the boring baseline is what
+saves you in a regime change (this is why it's load-bearing in this pipeline); a model
+this exposed needs a frequent retrain cadence and drift monitoring (the
+[network-anomaly-detection](../network-anomaly-detection/) use case exists to catch
+exactly this); and ignore the SHAP report whenever the model underneath it ranks at
+chance — explanations of a broken model explain the breakage, not the operation.
+
 ## 🏭 Adapting to your own shipment data
 
 1. Produce a DataFrame with the canonical columns in

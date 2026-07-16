@@ -12,6 +12,12 @@ or from https://www.kaggle.com/datasets/olistbr/brazilian-ecommerce
 Then:
     delivery-commit all --source olist --olist-dir data/olist
 
+Heads-up when evaluating on this dataset: Brazil's May 2018 truckers' strike falls
+right at the default train/test boundary, and Olist inflated its promised delivery
+windows afterwards, so the label regime shifts hard mid-test (monthly late rate:
+21% in March 2018, 1.4% in June). See the README's Olist section for why the
+linear baseline survives this and the tree model does not.
+
 Mapping notes — this file is the template for adapting *your* company's data:
 some canonical columns have no Olist equivalent (hub congestion, weather).
 They are filled with neutral constants, and the model simply learns they carry
