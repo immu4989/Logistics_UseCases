@@ -8,6 +8,12 @@
 ![Use cases](https://img.shields.io/badge/use%20cases-12%20ready-brightgreen)
 ![Explainability](https://img.shields.io/badge/every%20model-explained%20%26%20tested-purple)
 
+> 🤖 **Looking for the agentic-AI versions of these problems?** LLM agents with verified
+> evals, cost-per-run in dollars, and observed failure modes live in
+> [awesome-agentic-usecases](https://github.com/immu4989/awesome-agentic-usecases) —
+> starting with an [exception-triage agent](https://github.com/immu4989/awesome-agentic-usecases/tree/main/logistics-supply-chain/exception-triage-agent)
+> built on the same problem as this repo's classic-ML exception-triage pipeline.
+
 Each use case in this repo is a complete, self-contained project: dataset story, audited
 cleaning, feature engineering, modeling, evaluation, and explainability that is grounded
 by tests rather than eyeballed. The patterns come from production carrier ML, so shipping
