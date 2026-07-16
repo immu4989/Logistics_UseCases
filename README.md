@@ -5,7 +5,7 @@
 [![CI](https://github.com/immu4989/Logistics_UseCases/actions/workflows/ci.yml/badge.svg)](https://github.com/immu4989/Logistics_UseCases/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![License](https://img.shields.io/badge/license-Apache--2.0-green)
-![Use cases](https://img.shields.io/badge/use%20cases-7%20ready-brightgreen)
+![Use cases](https://img.shields.io/badge/use%20cases-8%20ready-brightgreen)
 ![Explainability](https://img.shields.io/badge/every%20model-explained%20%26%20tested-purple)
 
 Each use case in this repo is a complete, self-contained project: dataset story, audited
@@ -13,10 +13,10 @@ cleaning, feature engineering, modeling, evaluation, and explainability that is 
 by tests rather than eyeballed. The patterns come from production carrier ML, so shipping
 teams can adapt working code instead of starting from a blank notebook.
 
-Together the four projects cover the full operational loop: **predict** which shipments
-are at risk, **quote** delivery promises you can keep, **act** on the riskiest shipments
-within a real budget, and **watch** the network for drift before the monthly report sees
-it.
+Together the projects cover the operational loop end to end: **predict** which shipments
+are at risk, **quote** promises and prices you can stand behind, **plan** the capacity
+and staffing to meet the wave, **act** on the riskiest shipments within a real budget,
+and **watch** the network and the fleet for drift before the monthly report sees it.
 
 ## Use cases
 
@@ -29,7 +29,7 @@ it.
 | [📈 volume-forecasting](volume-forecasting/) | How many parcels hit each hub tomorrow and through the peak, so you can staff before the wave? | ✅ Ready |
 | [🗺️ route-optimization](route-optimization/) | Same stops, same trucks: how many miles is your zone-based routing leaving on the table? | ✅ Ready |
 | [💰 dynamic-pricing](dynamic-pricing/) | What should this freight quote cost, priced by each lane's own elasticity instead of cost-plus? | ✅ Ready |
-| 🔧 predictive-maintenance | Which vehicles break down in the next two weeks, with enough warning to fix on a schedule? | 🔨 In progress |
+| [🔧 predictive-maintenance](predictive-maintenance/) | Which vehicles break down in the next two weeks, with enough warning to fix on a schedule? | ✅ Ready |
 
 Every use case runs end-to-end on synthetic data with one command, in about a minute,
 with no proprietary data and no downloads:
@@ -154,6 +154,20 @@ generator's true curves in CI:
 ![Demand curves: true vs learned](dynamic-pricing/docs/img/elasticity_curves.png)
 
 Full write-up: [dynamic-pricing/README.md](dynamic-pricing/README.md)
+
+## 🔧 Predictive maintenance
+
+Modeled on DHL's fleet program (reported 25% fewer unplanned breakdowns) and Maersk's
+engine-failure prediction: a 600-vehicle fleet whose hidden component wear emits only
+what telematics actually gives you — noisy temperature, vibration, oil pressure, voltage
+and fault-code channels. Evaluated the way a workshop lives: at a 3%-of-fleet daily bay
+budget, XGBoost flags at **44% precision versus 5%** for the mileage rule, with a
+**14-day median warning**, worth about **$207k per quarter** at standard breakdown
+economics. SHAP work-order cards name the sensors behind every flag:
+
+![Flagged 14 days before failure](predictive-maintenance/docs/img/vehicle_trace.png)
+
+Full write-up: [predictive-maintenance/README.md](predictive-maintenance/README.md)
 
 ## Repository conventions
 
