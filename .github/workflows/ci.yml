@@ -10,7 +10,12 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
+        # Add new use-case folders here as they land.
+        use-case: [delivery-commit-prediction]
         python-version: ["3.10", "3.12"]
+    defaults:
+      run:
+        working-directory: ${{ matrix.use-case }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

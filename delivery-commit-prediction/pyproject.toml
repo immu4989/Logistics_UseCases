@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "latemile"
+name = "delivery-commit"
 version = "0.1.0"
 description = "End-to-end ML pipeline for predicting missed delivery commitments (on-time performance) in parcel logistics, with SHAP-based driver analysis."
 readme = "README.md"
@@ -31,7 +31,7 @@ dependencies = [
 dev = ["pytest>=7.0", "ruff>=0.4"]
 
 [project.scripts]
-latemile = "latemile.cli:main"
+delivery-commit = "delivery_commit.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

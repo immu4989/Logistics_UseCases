@@ -126,10 +126,10 @@ def train(df_clean: pd.DataFrame, config: TrainConfig | None = None) -> tuple[Tr
 def save(models: TrainedModels, model_dir: str | Path) -> Path:
     model_dir = Path(model_dir)
     model_dir.mkdir(parents=True, exist_ok=True)
-    path = model_dir / "latemile_models.joblib"
+    path = model_dir / "delivery_commit_models.joblib"
     joblib.dump(models, path)
     return path
 
 
 def load(model_dir: str | Path) -> TrainedModels:
-    return joblib.load(Path(model_dir) / "latemile_models.joblib")
+    return joblib.load(Path(model_dir) / "delivery_commit_models.joblib")

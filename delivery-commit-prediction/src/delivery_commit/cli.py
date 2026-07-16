@@ -1,9 +1,9 @@
 """Command-line interface.
 
-    latemile generate --out artifacts/data/raw.csv          # synthetic raw extract
-    latemile all                                            # full pipeline, synthetic
-    latemile all --source olist --olist-dir data/olist      # full pipeline, real data
-    latemile score --input new_shipments.csv                # score with a saved model
+    delivery-commit generate --out artifacts/data/raw.csv          # synthetic raw extract
+    delivery-commit all                                            # full pipeline, synthetic
+    delivery-commit all --source olist --olist-dir data/olist      # full pipeline, real data
+    delivery-commit score --input new_shipments.csv                # score with a saved model
 
 Artifacts land in ./artifacts by default:
     artifacts/data/      raw + cleaned tables
@@ -95,7 +95,7 @@ def cmd_score(args) -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
-    p = argparse.ArgumentParser(prog="latemile", description=__doc__)
+    p = argparse.ArgumentParser(prog="delivery-commit", description=__doc__)
     sub = p.add_subparsers(dest="command", required=True)
 
     g = sub.add_parser("generate", help="write a synthetic raw shipment extract")

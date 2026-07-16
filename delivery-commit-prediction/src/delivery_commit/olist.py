@@ -1,4 +1,4 @@
-"""Adapter: Olist Brazilian e-commerce dataset -> canonical latemile schema.
+"""Adapter: Olist Brazilian e-commerce dataset -> canonical delivery_commit schema.
 
 Olist is the best public proxy for delivery-commit prediction: ~100k real
 orders with both a *promised* date (``order_estimated_delivery_date``) and an
@@ -10,7 +10,7 @@ Download (free Kaggle account required):
 or from https://www.kaggle.com/datasets/olistbr/brazilian-ecommerce
 
 Then:
-    latemile all --source olist --olist-dir data/olist
+    delivery-commit all --source olist --olist-dir data/olist
 
 Mapping notes — this file is the template for adapting *your* company's data:
 some canonical columns have no Olist equivalent (hub congestion, weather).

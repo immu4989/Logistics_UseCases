@@ -10,8 +10,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from latemile import cleaning, evaluate, explain, schema, synthetic
-from latemile import train as train_mod
+from delivery_commit import cleaning, evaluate, explain, schema, synthetic
+from delivery_commit import train as train_mod
 
 N_SMALL = 12_000
 
@@ -92,7 +92,7 @@ def test_shap_recovers_true_drivers(trained, tmp_path):
 
 
 def test_score_roundtrip(trained, tmp_path):
-    from latemile import features
+    from delivery_commit import features
 
     models, _ = trained
     new = synthetic.make_dataset(n=300, seed=99, messy=True)
