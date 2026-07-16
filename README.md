@@ -1,4 +1,4 @@
-# 🚛 Logistics UseCases
+# 🚛 Shipping and Logistics Use Cases
 
 **Open-source, end-to-end machine learning for the logistics and shipping community.**
 
