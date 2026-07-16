@@ -2,6 +2,7 @@
 
 **Open-source, end-to-end machine learning for the logistics and shipping community.**
 
+[![CI](https://github.com/immu4989/Logistics_UseCases/actions/workflows/ci.yml/badge.svg)](https://github.com/immu4989/Logistics_UseCases/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![License](https://img.shields.io/badge/license-Apache--2.0-green)
 ![Use cases](https://img.shields.io/badge/use%20cases-4%20ready-brightgreen)
