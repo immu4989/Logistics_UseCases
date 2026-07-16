@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "eta-regression"
+version = "0.1.0"
+description = "End-to-end ML pipeline for parcel ETA prediction with quantile bounds: point transit-time estimates plus honest P10/P90 intervals for customer promises, explained with SHAP."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Imran Ahamed" }]
+keywords = ["logistics", "eta", "quantile-regression", "machine-learning", "shap", "supply-chain"]
+classifiers = [
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "numpy>=1.26",
+    "pandas>=2.0",
+    "scikit-learn>=1.3",
+    "xgboost>=2.0",
+    "shap>=0.46",
+    "matplotlib>=3.8",
+    "joblib>=1.3",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0", "ruff>=0.4"]
+
+[project.scripts]
+eta-regression = "eta_regression.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
