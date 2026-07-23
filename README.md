@@ -234,6 +234,23 @@ of AI agents across half its operational workflows.
 
 Full write-up: [exception-triage/README.md](exception-triage/README.md)
 
+## 🎛️ Try it live
+
+[demo/](demo/) is a Gradio app covering three of the use cases interactively: build a
+shipment and watch the miss-risk model score it with a live SHAP breakdown, read its ETA
+as a P10/P50/P90 interval with a keepable promise date, and spend an intervention budget
+to see expected-value allocation beat flag-the-riskiest. It runs on the packages' own
+synthetic generators (no data files), and is ready to deploy to a Hugging Face Space —
+`requirements.txt` installs the use-case packages straight from this repo.
+
+```bash
+cd demo
+python3.12 -m venv .venv
+.venv/bin/pip install -e ../delivery-commit-prediction -e ../eta-regression \
+                      -e ../intervention-optimization "gradio>=5,<6"
+.venv/bin/python app.py
+```
+
 ## 🔗 The loop, wired together
 
 Twelve use cases are a catalog; [operational-loop/](operational-loop/) is the assembly.

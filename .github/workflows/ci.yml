@@ -55,3 +55,19 @@ jobs:
       - run: pip install -e "../delivery-commit-prediction[dev]" -e ../intervention-optimization
       - run: ruff check run_loop.py tests
       - run: pytest -q tests
+
+  # The Gradio demo Space spans three use cases; own job, same pattern.
+  demo:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: demo
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e "../delivery-commit-prediction[dev]" -e ../eta-regression -e ../intervention-optimization "gradio>=5,<6"
+      - run: ruff check logic.py app.py test_demo.py
+      - run: pytest -q test_demo.py
