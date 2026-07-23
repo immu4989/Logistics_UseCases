@@ -40,6 +40,9 @@ SENTINELS = {
 }
 
 # A transit time outside this window is a scan error, not a slow parcel.
+# The 30-day cap fits the synthetic parcel network; a data-source adapter can
+# override it via clean(label_max_days=...) when its network legitimately runs
+# slower (the Olist adapter does: Brazilian e-commerce has real 40-day lanes).
 LABEL_MIN_DAYS = 0.0   # exclusive: nothing arrives before it ships
 LABEL_MAX_DAYS = 30.0
 
@@ -59,7 +62,11 @@ class CleaningReport:
         return "CleaningReport:\n" + "\n".join(lines)
 
 
-def clean(df: pd.DataFrame, report: CleaningReport | None = None) -> tuple[pd.DataFrame, CleaningReport]:
+def clean(
+    df: pd.DataFrame,
+    report: CleaningReport | None = None,
+    label_max_days: float = LABEL_MAX_DAYS,
+) -> tuple[pd.DataFrame, CleaningReport]:
     """Clean a raw shipment extract. Returns (clean_df, report)."""
     report = report or CleaningReport()
     df = df.copy()
@@ -112,13 +119,13 @@ def clean(df: pd.DataFrame, report: CleaningReport | None = None) -> tuple[pd.Da
     # is a lost-and-found parcel, not a lane the model should learn. Dropped,
     # never imputed: fabricating a label to keep a row poisons the regressor.
     if schema.LABEL_COL in df.columns:
-        bad = (df[schema.LABEL_COL] <= LABEL_MIN_DAYS) | (df[schema.LABEL_COL] > LABEL_MAX_DAYS)
+        bad = (df[schema.LABEL_COL] <= LABEL_MIN_DAYS) | (df[schema.LABEL_COL] > label_max_days)
         bad |= df[schema.LABEL_COL].isna()
         df = df[~bad]
         report.add(
             "drop_impossible_transit_days",
             bad.sum(),
-            f"kept ({LABEL_MIN_DAYS}, {LABEL_MAX_DAYS}] days",
+            f"kept ({LABEL_MIN_DAYS}, {label_max_days}] days",
         )
 
     # --- rows we cannot save ----------------------------------------------

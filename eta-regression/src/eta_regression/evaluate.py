@@ -36,6 +36,7 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import mean_absolute_error, mean_pinball_loss, mean_squared_error
 
+from . import features, schema
 from . import train as train_mod
 
 TERCILE_LABELS = ["short", "medium", "long"]
@@ -86,6 +87,68 @@ def coverage_by_distance(
     return out
 
 
+def conformal_qhat(models, splits, nominal: float = 0.8, cal_frac: float = 0.15) -> float:
+    """Split-conformal (CQR) width correction for the P10-P90 interval.
+
+    Quantile models fitted by gradient boosting have no coverage guarantee —
+    on data whose noise the trees never saw (a real network instead of the
+    generator), the raw interval can run systematically narrow or wide.
+    Conformalized quantile regression fixes the *level* without retraining:
+    on a calibration slice, measure how far outside the interval the truth
+    lands (score = max(p10 - y, y - p90)), take the ``nominal`` quantile of
+    those scores with the finite-sample correction, and widen (or, if
+    negative, shrink) both ends by that constant.
+
+    The calibration slice is the last ``cal_frac`` of *training* time — the
+    most recent data the test period never sees. It is the same slice early
+    stopping validated on, which makes qhat slightly optimistic in exchange
+    for not burning a third time window; on a regime shift the test month
+    will drift from calibration anyway, which is exactly what the
+    coverage-by-month breakout is there to show.
+    """
+    _, cal_df, _ = features.time_split(splits["train"], cal_frac)
+    X_cal = features.to_matrix(cal_df).reindex(columns=models.feature_columns, fill_value=0.0)
+    q = train_mod.predict_quantiles(models, X_cal, alphas=(0.1, 0.9))
+    y = cal_df[schema.LABEL_COL].to_numpy()
+    scores = np.maximum(q[0.1].to_numpy() - y, y - q[0.9].to_numpy())
+    n = len(scores)
+    level = min(1.0, np.ceil((n + 1) * nominal) / n)
+    return float(np.quantile(scores, level, method="higher"))
+
+
+def coverage_by_month(
+    dates: pd.Series, y_true: np.ndarray, lo: np.ndarray, hi: np.ndarray,
+    lo_c: np.ndarray, hi_c: np.ndarray,
+) -> pd.DataFrame:
+    """Raw vs conformal P10-P90 coverage per test calendar month.
+
+    Aggregate coverage over a multi-month test window can average a good
+    month against a broken one; if operating conditions shift mid-window
+    (strikes, carrier changes, promise-policy edits), this is the table that
+    shows it.
+    """
+    df = pd.DataFrame(
+        {
+            "month": dates.dt.to_period("M").astype(str).to_numpy(),
+            "covered_raw": ((y_true >= lo) & (y_true <= hi)).astype(float),
+            "covered_conformal": ((y_true >= lo_c) & (y_true <= hi_c)).astype(float),
+            "actual": y_true,
+        }
+    )
+    return (
+        df.groupby("month")
+        .agg(
+            shipments=("actual", "size"),
+            coverage_raw=("covered_raw", "mean"),
+            coverage_conformal=("covered_conformal", "mean"),
+            mean_actual_transit_days=("actual", "mean"),
+        )
+        .reset_index()
+        .sort_values("month")
+        .reset_index(drop=True)
+    )
+
+
 def promise_table(y_true: np.ndarray, qpreds: pd.DataFrame) -> pd.DataFrame:
     """The ops tradeoff: quote ceil(quantile) as the committed transit days.
 
@@ -129,8 +192,24 @@ def evaluate_models(models, splits, out_dir: str | Path) -> dict:
         "interval_p10_p90": {"nominal_coverage": 0.8, **interval_metrics(y_test, p10, p90)},
     }
 
+    # Conformal correction: fixes the interval *level* on networks where the
+    # raw quantile models run miscalibrated (see conformal_qhat docstring).
+    qhat = conformal_qhat(models, splits)
+    p10_c = np.maximum(p10 - qhat, 0.05)
+    p90_c = p90 + qhat
+    results["interval_p10_p90_conformal"] = {
+        "nominal_coverage": 0.8,
+        "qhat_days": qhat,
+        **interval_metrics(y_test, p10_c, p90_c),
+    }
+
     cov = coverage_by_distance(y_test, p10, p90, distance)
     results["coverage_by_distance_tercile"] = cov.to_dict(orient="records")
+
+    monthly = coverage_by_month(
+        splits["test"][schema.DATE_COL], y_test, p10, p90, p10_c, p90_c
+    )
+    results["coverage_by_month"] = monthly.to_dict(orient="records")
 
     promise = promise_table(y_test, qpreds)
     results["promise_table"] = promise.to_dict(orient="records")
@@ -155,10 +234,13 @@ def evaluate_models(models, splits, out_dir: str | Path) -> dict:
 
     (out_dir / "metrics.json").write_text(json.dumps(results, indent=2))
     cov.to_csv(out_dir / "coverage_by_distance.csv", index=False)
+    monthly.to_csv(out_dir / "coverage_by_month.csv", index=False)
     promise.to_csv(out_dir / "promise_table.csv", index=False)
 
     _plot_pred_vs_actual(y_test, p50, out_dir / "pred_vs_actual.png")
     _plot_coverage_by_tercile(cov, out_dir / "coverage_by_distance.png")
+    if monthly["month"].nunique() >= 2:
+        _plot_coverage_by_month(monthly, out_dir / "coverage_by_month.png")
     _plot_promise_curve(promise, out_dir / "promise_curve.png")
     return results
 
@@ -201,6 +283,37 @@ def _plot_coverage_by_tercile(cov: pd.DataFrame, path: Path) -> None:
     ax.set_ylabel("P10-P90 empirical coverage")
     ax.set_title("Interval honesty by lane length (held-out period)")
     ax.legend()
+    fig.tight_layout()
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+
+
+def _plot_coverage_by_month(monthly: pd.DataFrame, path: Path) -> None:
+    fig, ax = plt.subplots(figsize=(7.5, 4.5))
+    x = np.arange(len(monthly))
+    ax.bar(x, monthly["coverage_raw"], width=0.62, color="#2b6cb0", label="raw P10–P90")
+    ax.plot(
+        x,
+        monthly["coverage_conformal"],
+        marker="o",
+        color="#c05621",
+        lw=2,
+        label="conformal P10–P90",
+    )
+    ax.axhline(0.8, color="k", ls="--", lw=1, label="nominal 80%")
+    for i, row in monthly.iterrows():
+        ax.text(i, row["coverage_raw"] - 0.05, f"{row['coverage_raw']:.0%}",
+                ha="center", fontsize=8, color="white", fontweight="bold")
+        ax.text(i + 0.08, row["coverage_conformal"] + 0.025,
+                f"{row['coverage_conformal']:.0%}", ha="left", fontsize=8, color="#c05621")
+        ax.text(i, 0.04, f"{row['shipments']:,}\nshipments", ha="center",
+                fontsize=7, color="white")
+    ax.set_xticks(x)
+    ax.set_xticklabels(monthly["month"], fontsize=8)
+    ax.set_ylim(0, 1.05)
+    ax.set_ylabel("P10–P90 empirical coverage")
+    ax.set_title("Interval coverage by test month: raw vs conformal")
+    ax.legend(loc="upper right", fontsize=8, framealpha=0.95)
     fig.tight_layout()
     fig.savefig(path, dpi=150)
     plt.close(fig)

@@ -2,12 +2,14 @@
 
     eta-regression generate --out artifacts/data/raw.csv    # synthetic raw extract
     eta-regression all                                      # full pipeline, synthetic
+    eta-regression all --source olist --olist-dir data/olist  # full pipeline, real data
     eta-regression score --input new_shipments.csv          # quote ETAs with a saved model
 
-Artifacts land in ./artifacts by default:
-    artifacts/data/      raw + cleaned tables
-    artifacts/models/    trained models (joblib)
-    artifacts/reports/   metrics.json, coverage/promise plots, SHAP outputs
+Artifacts land in ./artifacts by default (./artifacts-olist for the Olist
+source, so a real-data run never overwrites the synthetic one):
+    <artifacts>/data/      raw + cleaned tables
+    <artifacts>/models/    trained models (joblib)
+    <artifacts>/reports/   metrics.json, coverage/promise plots, SHAP outputs
 """
 
 from __future__ import annotations
@@ -23,6 +25,24 @@ from . import cleaning, evaluate, explain, features, schema, synthetic
 from . import train as train_mod
 
 
+def _load_raw(args) -> pd.DataFrame:
+    if args.source == "synthetic":
+        return synthetic.make_dataset(n=args.n, seed=args.seed, messy=True)
+    if args.source == "olist":
+        from . import olist
+
+        return olist.load(args.olist_dir)
+    raise ValueError(f"unknown source {args.source}")
+
+
+def _label_max_days(source: str) -> float:
+    if source == "olist":
+        from . import olist
+
+        return olist.LABEL_MAX_DAYS
+    return cleaning.LABEL_MAX_DAYS
+
+
 def cmd_generate(args) -> None:
     df = synthetic.make_dataset(n=args.n, seed=args.seed, messy=not args.clean)
     out = Path(args.out)
@@ -32,17 +52,17 @@ def cmd_generate(args) -> None:
 
 
 def cmd_all(args) -> None:
-    art = Path(args.artifacts)
+    art = Path(args.artifacts or ("artifacts-olist" if args.source == "olist" else "artifacts"))
     data_dir, model_dir, report_dir = art / "data", art / "models", art / "reports"
     data_dir.mkdir(parents=True, exist_ok=True)
 
-    print("[1/5] generating raw data (synthetic, messy) ...")
-    raw = synthetic.make_dataset(n=args.n, seed=args.seed, messy=True)
+    print(f"[1/5] loading raw data (source={args.source}) ...")
+    raw = _load_raw(args)
     raw.to_csv(data_dir / "raw.csv", index=False)
     print(f"      {len(raw):,} rows, mean transit {raw[schema.LABEL_COL].mean():.2f} days")
 
     print("[2/5] cleaning ...")
-    clean_df, report = cleaning.clean(raw)
+    clean_df, report = cleaning.clean(raw, label_max_days=_label_max_days(args.source))
     clean_df.to_csv(data_dir / "clean.csv", index=False)
     report.to_frame().to_csv(data_dir / "cleaning_report.csv", index=False)
     print(str(report))
@@ -64,6 +84,11 @@ def cmd_all(args) -> None:
     print(
         f"      P10-P90 interval  coverage {iv['coverage']:.1%} (nominal 80%) | "
         f"mean width {iv['mean_width_days']:.2f} d"
+    )
+    ivc = results["interval_p10_p90_conformal"]
+    print(
+        f"      + conformal       coverage {ivc['coverage']:.1%} | "
+        f"mean width {ivc['mean_width_days']:.2f} d (qhat {ivc['qhat_days']:+.2f} d)"
     )
     tr = results["promise_tradeoff"]
     print(
@@ -112,10 +137,16 @@ def main(argv: list[str] | None = None) -> None:
     g.add_argument("--clean", action="store_true", help="skip mess injection")
     g.set_defaults(func=cmd_generate)
 
-    a = sub.add_parser("all", help="run the full pipeline: generate, clean, train, evaluate, explain")
-    a.add_argument("--n", type=int, default=60_000)
+    a = sub.add_parser("all", help="run the full pipeline: load, clean, train, evaluate, explain")
+    a.add_argument("--source", choices=["synthetic", "olist"], default="synthetic")
+    a.add_argument("--olist-dir", default="data/olist")
+    a.add_argument("--n", type=int, default=60_000, help="rows for synthetic source")
     a.add_argument("--seed", type=int, default=7)
-    a.add_argument("--artifacts", default="artifacts")
+    a.add_argument(
+        "--artifacts",
+        default=None,
+        help="default: ./artifacts (synthetic) or ./artifacts-olist (olist)",
+    )
     a.set_defaults(func=cmd_all)
 
     s = sub.add_parser("score", help="quote ETA quantiles for new shipments with saved models")

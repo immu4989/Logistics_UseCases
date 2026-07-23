@@ -48,6 +48,13 @@ ENGINEERED_NUMERIC = [
     "is_weekend_ship",
 ]
 
+# Numeric features a data-source adapter may add on top of the canonical
+# schema (e.g. the Olist adapter's checkout promise window). Included in the
+# model matrix only when present, so sources without them are unaffected.
+OPTIONAL_NUMERIC = [
+    "promised_window_days",
+]
+
 ONE_HOT_COLS = ["service_level", "origin_region", "dest_region", "dest_type"]
 
 
@@ -55,6 +62,7 @@ def to_matrix(df: pd.DataFrame) -> pd.DataFrame:
     """Build the model matrix: numeric features + one-hot categoricals."""
     numeric = [c for c in schema.NUMERIC_FEATURES if c in df.columns]
     numeric += [c for c in ENGINEERED_NUMERIC if c in df.columns]
+    numeric += [c for c in OPTIONAL_NUMERIC if c in df.columns]
     numeric += [c for c in df.columns if c.endswith("__was_missing")]
     passthrough = [
         c

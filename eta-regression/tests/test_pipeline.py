@@ -10,14 +10,20 @@ The two tests that carry the most weight:
   engineering or explanation grouping, this fails.
 """
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
 
-from eta_regression import cleaning, evaluate, explain, features, schema, synthetic
+from eta_regression import cleaning, evaluate, explain, features, olist, schema, synthetic
 from eta_regression import train as train_mod
 
 N_SMALL = 12_000
+
+# Real-data tests run only when the Olist CSVs are present locally (they are
+# CC BY-NC-SA and never committed, so CI skips these).
+OLIST_DIR = Path(__file__).resolve().parents[2] / "delivery-commit-prediction" / "data" / "olist"
 
 
 @pytest.fixture(scope="session")
@@ -121,3 +127,60 @@ def test_score_roundtrip_quantiles_sane(trained):
     # a crossed quantile pair on an ops screen discredits all three numbers.
     assert (q[0.1] <= q[0.5]).all()
     assert (q[0.5] <= q[0.9]).all()
+
+
+@pytest.fixture(scope="session")
+def olist_clean():
+    raw = olist.load(OLIST_DIR)
+    df, _ = cleaning.clean(raw, label_max_days=olist.LABEL_MAX_DAYS)
+    return df
+
+
+@pytest.fixture(scope="session")
+def olist_trained(olist_clean):
+    cfg = train_mod.TrainConfig(n_estimators=250, seed=11)
+    return train_mod.train(olist_clean, cfg)
+
+
+@pytest.mark.skipif(
+    not OLIST_DIR.exists(),
+    reason="Olist dataset not downloaded (kaggle datasets download -d "
+    "olistbr/brazilian-ecommerce); real-data tests are local-only",
+)
+class TestOlist:
+    """Real-data checks: the same product claims, on 96k real Brazilian orders."""
+
+    def test_loader_schema_and_label_bounds(self, olist_clean):
+        schema.validate(olist_clean)
+        y = olist_clean[schema.LABEL_COL]
+        assert len(olist_clean) > 50_000
+        assert y.between(olist.LABEL_MIN_DAYS, olist.LABEL_MAX_DAYS).all()
+        # Brazil-wide e-commerce median transit is ~7-12 days; anything far
+        # outside that means the label mapping broke.
+        assert 7.0 < y.median() < 12.0
+        # The promise-window feature must be known at purchase time and sane.
+        assert olist_clean["promised_window_days"].between(1, 90).all()
+
+    def test_quantiles_monotone_on_real_data(self, olist_trained):
+        models, splits = olist_trained
+        q = train_mod.predict_quantiles(models, splits["X_test"], alphas=(0.1, 0.5, 0.9))
+        assert np.isfinite(q.to_numpy()).all()
+        assert (q[0.1] <= q[0.5]).all()
+        assert (q[0.5] <= q[0.9]).all()
+
+    def test_interval_coverage_real_data(self, olist_trained):
+        models, splits = olist_trained
+        y_test = splits["y_test"]
+        q = train_mod.predict_quantiles(models, splits["X_test"], alphas=(0.1, 0.9))
+        p10, p90 = q[0.1].to_numpy(), q[0.9].to_numpy()
+        raw = evaluate.interval_metrics(y_test, p10, p90)["coverage"]
+        qhat = evaluate.conformal_qhat(models, splits)
+        conf = evaluate.interval_metrics(
+            y_test, np.maximum(p10 - qhat, 0.05), p90 + qhat
+        )["coverage"]
+        # Real data, post-strike test window: the bar is honesty, not beauty.
+        # Both interval variants must stay usable; conformal must not land
+        # further from nominal 80% than the raw interval does.
+        assert 0.60 <= raw <= 0.95, f"raw P10-P90 coverage {raw:.3f} outside [0.60, 0.95]"
+        assert 0.60 <= conf <= 0.95, f"conformal coverage {conf:.3f} outside [0.60, 0.95]"
+        assert abs(conf - 0.8) <= abs(raw - 0.8) + 0.02

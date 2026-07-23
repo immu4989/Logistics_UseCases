@@ -170,6 +170,73 @@ coverage on held-out data lands in [0.70, 0.90]. If a refactor silently breaks t
 intervals or the explanations, **CI fails**. Keep this harness when you adapt the
 pipeline to your own data.
 
+## 🚚 Run it on real data (Olist)
+
+The repo includes an adapter for the public
+[Olist Brazilian e-commerce dataset](https://www.kaggle.com/datasets/olistbr/brazilian-ecommerce):
+~96k real delivered orders with purchase and customer-delivery timestamps, so the
+transit-time label is real, not simulated.
+
+```bash
+kaggle datasets download -d olistbr/brazilian-ecommerce -p data/olist --unzip
+eta-regression all --source olist --olist-dir data/olist
+# artifacts land in ./artifacts-olist, never clobbering the synthetic run
+```
+
+[olist.py](src/eta_regression/olist.py) is intentionally the template to copy when you
+write the adapter for your own company's data: it maps what Olist has onto the canonical
+schema (seller→customer haversine distance from zip-prefix centroids, product
+weight/dims, coarse state regions, the checkout promise window), fills what it lacks
+(hub telemetry, weather) with neutral constants, and the rest of the pipeline runs
+unchanged.
+
+### Olist results: real transit times, and the strike that bends the intervals
+
+Held out: the final ~3 months (19,150 orders after 2018-05-27), mean actual transit
+8.68 days on a network whose overall median is ~10 days. Nothing was tuned on the test
+period.
+
+| | Linear baseline | XGBoost point | XGBoost P50 |
+|---|---:|---:|---:|
+| MAE | 4.64 d | 4.95 d | **3.82 d** |
+| Median APE | 54.0% | 59.9% | **41.5%** |
+
+Note the inversion versus the synthetic network: the squared-error tree model loses to
+the linear baseline here, while the pinball-loss P50 beats both by a wide margin. The
+reason is the same event that dominates the delivery-commit use case's Olist run —
+Brazil's May 2018 truckers' strike sits right at the train/test boundary. Squared error
+chases the strike-era slow tail it was trained on; a median objective largely shrugs
+it off.
+
+| P10–P90 interval (nominal 80%) | Raw | + conformal |
+|---|---:|---:|
+| Empirical coverage | 75.3% | **77.9%** |
+| Mean width | 14.83 d | 15.16 d |
+
+The raw quantile models run miscalibrated on real data — there is no coverage guarantee
+in gradient boosting, which is why the pipeline now carries a split-conformal (CQR)
+correction calibrated on the last slice of training time. It buys back about half the
+gap (qhat = +0.16 d per side). The other half is not a calibration problem at all:
+
+![Olist coverage by month](docs/img/olist_coverage_by_month.png)
+
+The miss is one-sided — 21.7% of orders finish *below* P10 versus 3.0% above P90 —
+because models trained through the strike keep over-predicting a network that is
+recovering underneath them. Post-strike, actual transit falls month over month (11.8 →
+9.2 → 8.9 → 7.7 days) and Olist simultaneously unwinds its inflated checkout promises
+(mean promise window 36 → 15 days). That promise window is the model's second-biggest
+driver (28% of the SHAP explanation, behind distance at 34%), so predictions deflate
+with it and coverage climbs back from 70% in June to 81% by August. A constant conformal
+offset, calibrated on strike-era months, cannot fix a drift — only a retrain cadence and
+drift monitoring can. This is a finding to keep, not a number to tune away.
+
+The promise table still earns its keep on real orders: quote ceil(P50) and 78.3% of
+promises hold at 11.0 quoted days; quote ceil(P90) and **97.2%** hold at 21.1 days. Ten
+extra quoted days is the honest price of a 97% promise on a continent-sized network
+predicted from purchase-time features alone — and the curve shows the cheaper middle:
+the 0.7 quantile lands essentially on a 90% kept-promise bar (89.8%) at 14.1 quoted
+days, and the 0.8 quantile clears it (94.2%) at 16.5.
+
 ## 🏭 Adapting to your own shipment data
 
 1. Produce a DataFrame with the canonical columns in
@@ -225,11 +292,13 @@ src/eta_regression/
   synthetic.py   messy synthetic generator with documented transit process
                  and heteroscedastic noise (the reason quantiles exist)
   cleaning.py    audited cleaning: duplicates, sentinels, bounds, label sanity
+  olist.py       adapter: public Olist dataset -> canonical schema (real transit labels)
   features.py    feature engineering, time-based split, model matrix
   train.py       linear baseline + XGBoost point + quantile models (0.1..0.95)
-  evaluate.py    MAE/pinball/coverage, segmented coverage, promise table + curve
+  evaluate.py    MAE/pinball/coverage, conformal (CQR) correction, segmented +
+                 monthly coverage, promise table + curve
   explain.py     SHAP on the P50 model: global + local reports, driver ranking
-  cli.py         eta-regression generate | all | score
+  cli.py         eta-regression generate | all [--source olist] | score
 tests/           end-to-end tests incl. coverage honesty and
                  "SHAP recovers the true drivers"
 ```
@@ -238,9 +307,10 @@ tests/           end-to-end tests incl. coverage honesty and
 
 ## 🤝 Contributing
 
-Issues and PRs welcome, especially adapters for public datasets with real transit
-times, conformal-calibration layers on top of the quantile models, and promise-policy
-cost analysis (turning the promise curve into revenue impact). Please keep the two
+Issues and PRs welcome, especially adapters for more public datasets with real transit
+times, per-segment conformal calibration (one qhat per lane group instead of a global
+constant), and promise-policy cost analysis (turning the promise curve into revenue
+impact). Please keep the two
 invariants: no feature that isn't knowable at induction time, and no explanation or
 interval output without a test that grounds it.
 
