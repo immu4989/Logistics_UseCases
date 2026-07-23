@@ -239,6 +239,8 @@ Full write-up: [exception-triage/README.md](exception-triage/README.md)
 
 **▶ [Open the live demo on Hugging Face Spaces](https://huggingface.co/spaces/immu4989/Logistics-UseCases-Demo)**
 
+[![Demo walkthrough](demo/docs/demo.gif)](https://huggingface.co/spaces/immu4989/Logistics-UseCases-Demo)
+
 [demo/](demo/) is a Gradio app covering three of the use cases interactively: build a
 shipment and watch the miss-risk model score it with a live SHAP breakdown, read its ETA
 as a P10/P50/P90 interval with a keepable promise date, and spend an intervention budget
