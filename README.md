@@ -234,6 +234,36 @@ of AI agents across half its operational workflows.
 
 Full write-up: [exception-triage/README.md](exception-triage/README.md)
 
+## 🔗 The loop, wired together
+
+Twelve use cases are a catalog; [operational-loop/](operational-loop/) is the assembly.
+It trains the commit-risk model, scores an unseen batch of 20,000 shipments, hands the
+scores to the intervention allocator with a $6,000 budget, and evaluates the decisions
+on realized outcomes: **$33,133/day net savings, capturing 98.9% of the true-risk
+oracle** and beating classic top-K flagging by $27,882/day. The gap between model
+scores and perfect scores comes out to ~$219k/year — the end-to-end price tag on
+upstream model accuracy, measured through the decisions it feeds.
+
+Full write-up: [operational-loop/README.md](operational-loop/README.md)
+
+## 🚀 Deploying
+
+[delivery-commit-prediction/serving/](delivery-commit-prediction/serving/) is the
+copy-me deployment template: a FastAPI service that reuses the training-time cleaning
+and feature code (training/serving skew made impossible rather than tested for), a
+Dockerfile with a mounted-artifact pattern so models rotate on your retrain cadence,
+a model card with monitoring expectations, and the CLI as the batch path.
+
+## 📊 Real-data validation
+
+Three use cases now carry real-data results sections alongside their synthetic
+benchmarks: delivery-commit-prediction and eta-regression on the Olist marketplace data
+(96k real orders, including honest analysis of the 2018 truckers'-strike regime shift
+that breaks tree models and miscalibrates intervals), predictive-maintenance on the UCI
+AI4I 2020 dataset (PR-AUC 0.78 at a 3.4% base rate, with the model recovering the
+dataset's documented failure-mode physics), and route-optimization benchmarked against
+CVRPLIB's proven optima (**4.7% mean gap** across 8 standard instances).
+
 ## Repository conventions
 
 Every use case keeps two invariants:

@@ -38,3 +38,20 @@ jobs:
       - run: pip install -e ".[dev]"
       - run: ruff check src tests
       - run: pytest -q
+
+  # The loop demo spans two use cases, so it gets its own job instead of a
+  # matrix row: install the siblings editable, then run its tests.
+  operational-loop:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: operational-loop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e "../delivery-commit-prediction[dev]" -e ../intervention-optimization
+      - run: ruff check run_loop.py tests
+      - run: pytest -q tests
