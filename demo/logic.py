@@ -47,30 +47,53 @@ GOOD = "#2f855a"
 _state: dict = {"commit": None, "eta": None, "shap": None, "iv_day": None}
 
 
+def _cache_dir():
+    """A writable cache dir, or None. Some hosts (HF Spaces) mount the app dir
+    read-only, in which case we skip caching and just retrain per cold start."""
+    try:
+        MODEL_CACHE.mkdir(exist_ok=True)
+        probe = MODEL_CACHE / ".probe"
+        probe.write_text("ok")
+        probe.unlink()
+        return MODEL_CACHE
+    except OSError:
+        return None
+
+
+def _try_save(save_fn, models, cache, name) -> None:
+    if cache is not None:
+        try:
+            save_fn(models, cache / name)
+        except OSError:
+            pass
+
+
 # ---------------------------------------------------------------------------
 # Model loading (train once, cache)
 # ---------------------------------------------------------------------------
 def _commit_models():
     if _state["commit"] is None:
-        MODEL_CACHE.mkdir(exist_ok=True)
-        path = MODEL_CACHE / "commit"
+        cache = _cache_dir()
         try:
-            _state["commit"] = dc_train.load(path)
+            _state["commit"] = dc_train.load(cache / "commit") if cache else None
+            if _state["commit"] is None:
+                raise FileNotFoundError
         except Exception:  # noqa: BLE001 - any load failure -> retrain from generator
             raw = dc_synthetic.make_dataset(n=14000, seed=7, messy=True)
             clean, _ = dc_cleaning.clean(raw)
             models, _ = dc_train.train(clean, dc_train.TrainConfig(n_estimators=120, seed=7))
-            dc_train.save(models, path)
+            _try_save(dc_train.save, models, cache, "commit")
             _state["commit"] = models
     return _state["commit"]
 
 
 def _eta_models():
     if _state["eta"] is None:
-        MODEL_CACHE.mkdir(exist_ok=True)
-        path = MODEL_CACHE / "eta"
+        cache = _cache_dir()
         try:
-            _state["eta"] = eta_train.load(path)
+            _state["eta"] = eta_train.load(cache / "eta") if cache else None
+            if _state["eta"] is None:
+                raise FileNotFoundError
         except Exception:  # noqa: BLE001
             raw = eta_synthetic.make_dataset(n=14000, seed=7, messy=True)
             clean, _ = eta_cleaning.clean(raw)
@@ -78,7 +101,7 @@ def _eta_models():
                 n_estimators=120, seed=7, quantiles=eta_train.PRODUCT_QUANTILES
             )
             models, _ = eta_train.train(clean, cfg)
-            eta_train.save(models, path)
+            _try_save(eta_train.save, models, cache, "eta")
             _state["eta"] = models
     return _state["eta"]
 
