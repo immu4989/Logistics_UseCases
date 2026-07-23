@@ -180,6 +180,105 @@ has real work to do: duplicated (vehicle, day) rows, sensor-dropout days,
 frozen-sensor stretches (a stuck transmitter repeating the same value for
 days), and negative odometer glitches.
 
+## 🏭 Real data: AI4I 2020
+
+The synthetic fleet proves the pipeline's discipline; this section proves the
+modelling stack on real-schema public data. The repo commits the
+[UCI AI4I 2020 Predictive Maintenance dataset](https://archive.ics.uci.edu/dataset/601/ai4i+2020+predictive+maintenance+dataset)
+(S. Matzka, "Explainable Artificial Intelligence for Predictive Maintenance
+Applications", AI4I 2020; CC BY 4.0, attribution in
+[public_data/README.md](public_data/README.md)): 10,000 machine records, five
+process features plus a machine-quality type, and a binary failure label at a
+**3.4% base rate**. One command, no download:
+
+```bash
+fleet-maint ai4i          # uses public_data/ai4i2020.csv, writes artifacts-ai4i/
+```
+
+### ⚠️ The trap that invalidates most public AI4I results
+
+> **The five failure-mode columns — `TWF`, `HDF`, `PWF`, `OSF`, `RNF` — are
+> COMPONENTS of the label, not features.** `Machine failure` is set exactly
+> when one of them fires. Feed them to a model and it "achieves" ~99% accuracy
+> by reading the answer key, which is precisely what countless public
+> notebooks on this dataset report. [ai4i.py](src/fleet_maintenance/ai4i.py)
+> drops them at load time, `to_xy` refuses to emit them even if they are
+> concatenated back on, and a CI test asserts the model matrix never contains
+> them.
+>
+> The second trap is quieter: `RNF` marks a 0.1% *random* failure draw that no
+> feature can explain, so ~19 rows are label noise by construction — and the
+> published file's own bookkeeping is inconsistent about it (18 of the 19 RNF
+> rows have `Machine failure = 0`, while 9 positives carry no mode flag at
+> all). Any AI4I result claiming near-perfect scores has stepped on at least
+> one of these rakes.
+
+### Results on the honest features
+
+Held-out 2,500 records (stratified 25%), six features only — air temperature,
+process temperature, rotational speed, torque, tool wear, machine type:
+
+| | Logistic | XGBoost |
+|---|---:|---:|
+| PR-AUC (base rate 3.4%) | 0.462 | **0.782** |
+| ROC-AUC | 0.892 | **0.975** |
+| Precision @ 3% flagged | 49.3% | **84.0%** |
+| Recall @ 3% flagged | 43.5% | **74.1%** |
+
+The 3%-flagged row is the same budget the fleet pipeline gives the workshop:
+flag the riskiest 3% of records and 84% of them are genuine failures, versus
+the 3.4% a random pull would catch. XGBoost's wide margin over the logistic
+baseline is the mirror image of the Olist story in
+[delivery-commit-prediction](../delivery-commit-prediction/): AI4I's failure
+modes are genuinely conditional (thresholds and products of features), which
+is the regime where trees earn their keep.
+
+### SHAP recovers the documented physics
+
+AI4I is unusual among public datasets: its author *published the failure
+equations*, so the explanation layer can be audited against ground truth
+instead of eyeballed — the real-data analogue of the synthetic suite's
+"SHAP buries the planted noise" test.
+
+![AI4I SHAP beeswarm](docs/img/ai4i_shap_summary.png)
+
+The beeswarm reads like the paper. High torque pushes risk up (power and
+overstrain failures), high tool wear pushes risk up (tool-wear and overstrain
+failures), and the temperature pair splits in *opposite* directions — high air
+temperature raises risk while high process temperature lowers it, which is the
+model reconstructing the heat-dissipation criterion (failure when process
+minus air temperature is *small*) from two raw columns. Scoring the held-out
+records that fall inside each documented failure condition:
+
+| Documented mode (published equation) | Rows in zone | Failure rate in zone | Model risk in vs out of zone |
+|---|---:|---:|---:|
+| HDF: process − air temp < 8.6 K and speed < 1380 rpm | 29 | 100% | 73% vs 2.2% (**33x**) |
+| PWF: power = torque × speed outside 3,500–9,000 W | 28 | 100% | 60% vs 2.4% (**25x**) |
+| OSF: tool wear × torque > 11–13 kminNm (by type) | 23 | 100% | 70% vs 2.4% (**29x**) |
+| TWF: tool wear in the 200–240 min window | 195 | 13.8% | 13% vs 2.2% (**6x**) |
+
+All four recovered, and the ordering is honest too: the three deterministic
+modes get 25–33x risk ratios, while TWF — random *within* its wear window by
+construction — gets a proportionally hedged 6x. Grouped SHAP shares: torque
+27%, tool wear 24%, air temperature 19%, rotational speed 17%, process
+temperature 9%, machine type 5%.
+
+### What this dataset cannot test
+
+AI4I has **no timestamps**, so the house rule — time-based splits only — has
+nothing to split on, and `ai4i.py` uses a stratified random split instead.
+That is a real concession, stated in the code as well: AI4I is a
+components-bench dataset of independent records from a documented generator,
+not an operations log. It validates the modelling stack (rare-label ranking,
+top-k ops metrics, explanation audit) but says nothing about the temporal
+leakage discipline that the synthetic fleet and its 90-day holdout exist to
+enforce.
+
+Reproduce: `fleet-maint ai4i` (metrics, PR curves, beeswarm, driver ranking
+and the physics audit land in `artifacts-ai4i/`); the AI4I tests in
+[tests/test_pipeline.py](tests/test_pipeline.py) run in CI on the committed
+CSV.
+
 ## 🧠 Design decisions that make or break fleet models
 
 **Precision at capacity, day by day, never pooled.** The shop has 18 bays, not
@@ -237,7 +336,9 @@ src/fleet_maintenance/
   train.py       mileage rule + logistic + XGBoost (early stopping, then refit)
   evaluate.py    capacity-constrained precision/recall, lead time, money table
   explain.py     SHAP beeswarm, sensor-grouped ranking, work-order card
-  cli.py         fleet-maint generate | all
+  ai4i.py        real-data validation: UCI AI4I 2020 adapter, leakage guard, physics audit
+  cli.py         fleet-maint generate | all | ai4i
+public_data/     committed AI4I 2020 CSV (CC BY 4.0) + attribution
 tests/           end-to-end tests incl. "SHAP buries the planted noise"
 ```
 

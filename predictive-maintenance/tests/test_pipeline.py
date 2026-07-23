@@ -14,7 +14,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from fleet_maintenance import cleaning, evaluate, explain, features, synthetic
+from fleet_maintenance import ai4i, cleaning, evaluate, explain, features, synthetic
 from fleet_maintenance import train as train_mod
 
 N_VEHICLES = 300
@@ -162,3 +162,83 @@ def test_work_order_card(trained, tmp_path):
     assert "Predicted 14-day breakdown risk" in text
     assert "Schedule bay time" in text
     assert "consistent with" in text
+
+
+# ---------------------------------------------------------------------------
+# Real data: UCI AI4I 2020 (public_data/ai4i2020.csv is committed, CC BY 4.0,
+# so these run everywhere CI runs — no download, no skipif).
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="session")
+def ai4i_df():
+    return ai4i.load()
+
+
+@pytest.fixture(scope="session")
+def ai4i_fitted(ai4i_df):
+    train_df, test_df = ai4i.stratified_split(ai4i_df, seed=SEED)
+    X_train, y_train = ai4i.to_xy(train_df)
+    X_test, y_test = ai4i.to_xy(test_df)
+    _, xgb = ai4i.train_models(X_train, y_train, seed=SEED)
+    return X_test, y_test, xgb
+
+
+def test_ai4i_loader_shape_and_label_rate(ai4i_df):
+    assert len(ai4i_df) == 10_000
+    # Published base rate: 339 failures out of 10,000 (~3.4%).
+    assert ai4i_df[ai4i.LABEL_COL].sum() == 339
+    assert set(ai4i.FEATURE_COLS) <= set(ai4i_df.columns)
+    # One-hot covers every record exactly once.
+    assert (ai4i_df[ai4i.TYPE_DUMMIES].sum(axis=1) == 1).all()
+
+
+def test_ai4i_failure_mode_columns_never_reach_the_matrix(ai4i_df):
+    # THE AI4I trap: TWF/HDF/PWF/OSF/RNF are components of the label. Any
+    # matrix containing them scores ~99% by reading the answer key.
+    assert not set(ai4i_df.columns) & set(ai4i.FAILURE_MODE_COLS)
+    X, _ = ai4i.to_xy(ai4i_df)
+    assert not set(X.columns) & set(ai4i.FAILURE_MODE_COLS)
+    assert ai4i.LABEL_COL not in X.columns
+    # Belt and braces: even if someone concatenates the raw columns back on,
+    # to_xy must not emit them.
+    polluted = ai4i_df.copy()
+    for c in ai4i.FAILURE_MODE_COLS:
+        polluted[c] = 1
+    X2, _ = ai4i.to_xy(polluted)
+    assert not set(X2.columns) & set(ai4i.FAILURE_MODE_COLS)
+
+
+def test_ai4i_split_is_stratified_and_disjoint(ai4i_df):
+    train_df, test_df = ai4i.stratified_split(ai4i_df, test_frac=0.25, seed=SEED)
+    assert len(train_df) + len(test_df) == len(ai4i_df)
+    assert not set(train_df.index) & set(test_df.index)
+    # Stratification keeps the rare-positive rate stable on both sides.
+    base = ai4i_df[ai4i.LABEL_COL].mean()
+    assert abs(test_df[ai4i.LABEL_COL].mean() - base) < 0.005
+
+
+def test_ai4i_xgboost_pr_auc_beats_5x_base_rate(ai4i_fitted):
+    from sklearn.metrics import average_precision_score
+
+    X_test, y_test, xgb = ai4i_fitted
+    pr_auc = average_precision_score(y_test, xgb.predict_proba(X_test)[:, 1])
+    base_rate = y_test.mean()
+    # Honest features only. With the leaked mode columns this would be ~1.0;
+    # the bar here is a real ranking win, not the answer key.
+    assert pr_auc > 5 * base_rate, f"PR-AUC {pr_auc:.3f} vs base rate {base_rate:.3%}"
+
+
+def test_ai4i_shap_top3_matches_documented_physics(ai4i_fitted):
+    import shap
+
+    X_test, _, xgb = ai4i_fitted
+    shap_values = shap.TreeExplainer(xgb).shap_values(X_test)
+    mean_abs = pd.Series(np.abs(shap_values).mean(axis=0), index=X_test.columns)
+    grouped = mean_abs.groupby(mean_abs.index.map(lambda c: ai4i.GROUPS.get(c, c))).sum()
+    top3 = set(grouped.sort_values(ascending=False).head(3).index)
+    # The documented failure modes run on torque (PWF, OSF), tool wear
+    # (TWF, OSF) and the air/process temperature pair (HDF), so at least one
+    # of those physical drivers must sit in the SHAP top 3.
+    physics_drivers = {"torque", "tool wear", "air temperature", "process temperature"}
+    assert top3 & physics_drivers, f"top-3 drivers were: {sorted(top3)}"

@@ -2,11 +2,13 @@
 
     fleet-maint generate --out artifacts/data/raw.csv    # synthetic raw telematics feed
     fleet-maint all                                      # full pipeline
+    fleet-maint ai4i                                     # real-data validation (UCI AI4I 2020)
 
 Artifacts land in ./artifacts by default:
     artifacts/data/      raw + cleaned panels, cleaning report
     artifacts/models/    trained models (joblib)
     artifacts/reports/   metrics.json, policy table, plots, SHAP outputs, work order
+`fleet-maint ai4i` writes to ./artifacts-ai4i by default.
 """
 
 from __future__ import annotations
@@ -15,7 +17,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import cleaning, evaluate, explain, synthetic
+from . import ai4i, cleaning, evaluate, explain, synthetic
 from . import train as train_mod
 
 POLICY_LABELS = {
@@ -101,6 +103,35 @@ def cmd_all(args) -> None:
     print(f"done. reports -> {report_dir}")
 
 
+def cmd_ai4i(args) -> None:
+    print("[1/4] loading UCI AI4I 2020 (failure-mode columns TWF/HDF/PWF/OSF/RNF excluded) ...")
+    results = ai4i.run(csv_path=args.csv, out_dir=args.artifacts, seed=args.seed)
+    print(
+        f"      {results['n_rows']:,} records, base rate {results['base_rate']:.2%}; "
+        f"held-out {results['n_test_rows']:,} rows (stratified random split: "
+        "AI4I has no timestamps, so the house time-split rule cannot apply)"
+    )
+    print("[2/4] trained logistic + XGBoost")
+    print("[3/4] held-out metrics:")
+    for name in ("logistic", "xgboost"):
+        m = results[name]
+        print(
+            f"      {name:<10} PR-AUC {m['pr_auc']:.3f} | ROC-AUC {m['roc_auc']:.3f} | "
+            f"precision@3% {m['precision_at_3%_flagged']:.1%} "
+            f"(recall {m['recall_at_3%_flagged']:.1%})"
+        )
+    print("[4/4] SHAP + physics audit:")
+    print(f"      top drivers: {', '.join(results['shap_top_drivers'])}")
+    for row in results["physics_check"]:
+        print(
+            f"      {row['zone']:<9} n={row['n_rows']:<4} "
+            f"failure rate {row['failure_rate_in']:.1%} vs {row['failure_rate_out']:.1%} | "
+            f"model risk {row['model_risk_in']:.1%} vs {row['model_risk_out']:.1%} "
+            f"({row['model_risk_ratio']:.0f}x)"
+        )
+    print(f"done. reports -> {args.artifacts}")
+
+
 def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(prog="fleet-maint", description=__doc__)
     sub = p.add_subparsers(dest="command", required=True)
@@ -121,6 +152,14 @@ def main(argv: list[str] | None = None) -> None:
     a.add_argument("--seed", type=int, default=7)
     a.add_argument("--artifacts", default="artifacts")
     a.set_defaults(func=cmd_all)
+
+    r = sub.add_parser(
+        "ai4i", help="real-data validation on the UCI AI4I 2020 dataset (committed in-repo)"
+    )
+    r.add_argument("--csv", default=None, help="path to ai4i2020.csv (default: public_data/)")
+    r.add_argument("--artifacts", default="artifacts-ai4i")
+    r.add_argument("--seed", type=int, default=7)
+    r.set_defaults(func=cmd_ai4i)
 
     args = p.parse_args(argv)
     try:
