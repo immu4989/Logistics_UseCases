@@ -3,6 +3,7 @@
 **Open-source, end-to-end machine learning for the logistics and shipping community.**
 
 [![CI](https://github.com/immu4989/Logistics_UseCases/actions/workflows/ci.yml/badge.svg)](https://github.com/immu4989/Logistics_UseCases/actions/workflows/ci.yml)
+[![Open in Spaces](https://huggingface.co/datasets/huggingface/badges/resolve/main/open-in-hf-spaces-sm.svg)](https://huggingface.co/spaces/immu4989/Logistics-UseCases-Demo)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![License](https://img.shields.io/badge/license-Apache--2.0-green)
 ![Use cases](https://img.shields.io/badge/use%20cases-12%20ready-brightgreen)
@@ -235,6 +236,8 @@ direction of putting AI agents across a large share of operational workflows.
 Full write-up: [exception-triage/README.md](exception-triage/README.md)
 
 ## 🎛️ Try it live
+
+**▶ [Open the live demo on Hugging Face Spaces](https://huggingface.co/spaces/immu4989/Logistics-UseCases-Demo)**
 
 [demo/](demo/) is a Gradio app covering three of the use cases interactively: build a
 shipment and watch the miss-risk model score it with a live SHAP breakdown, read its ETA
