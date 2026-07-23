@@ -39,6 +39,10 @@ from eta_regression import train as eta_train
 from intervention_opt import evaluate as iv_evaluate
 from intervention_opt import synthetic as iv_synthetic
 
+# Pre-trained models shipped with the deployed Space (built by build_models.py)
+# so visitors never wait for a cold-start train. Absent in the git checkout,
+# where the app trains on demand and caches instead — see _commit_models.
+BUNDLED = Path(__file__).parent / "models"
 MODEL_CACHE = Path(__file__).parent / ".model_cache"
 INK = "#2b6cb0"
 BAD = "#c53030"
@@ -71,7 +75,41 @@ def _try_save(save_fn, models, cache, name) -> None:
 # ---------------------------------------------------------------------------
 # Model loading (train once, cache)
 # ---------------------------------------------------------------------------
+def _load_bundled(load_fn, name):
+    """Load a pre-trained model shipped with the Space, or None if absent."""
+    path = BUNDLED / name
+    if path.exists():
+        try:
+            return load_fn(path)
+        except Exception:  # noqa: BLE001 - version skew etc. -> fall back to training
+            return None
+    return None
+
+
+def build_commit(save_to=None):
+    """Train the commit-risk models (used at cold start and by build_models.py)."""
+    raw = dc_synthetic.make_dataset(n=14000, seed=7, messy=True)
+    clean, _ = dc_cleaning.clean(raw)
+    models, _ = dc_train.train(clean, dc_train.TrainConfig(n_estimators=120, seed=7))
+    if save_to is not None:
+        dc_train.save(models, save_to)
+    return models
+
+
+def build_eta(save_to=None):
+    """Train the ETA quantile models (used at cold start and by build_models.py)."""
+    raw = eta_synthetic.make_dataset(n=14000, seed=7, messy=True)
+    clean, _ = eta_cleaning.clean(raw)
+    cfg = eta_train.TrainConfig(n_estimators=120, seed=7, quantiles=eta_train.PRODUCT_QUANTILES)
+    models, _ = eta_train.train(clean, cfg)
+    if save_to is not None:
+        eta_train.save(models, save_to)
+    return models
+
+
 def _commit_models():
+    if _state["commit"] is None:
+        _state["commit"] = _load_bundled(dc_train.load, "commit")
     if _state["commit"] is None:
         cache = _cache_dir()
         try:
@@ -79,9 +117,7 @@ def _commit_models():
             if _state["commit"] is None:
                 raise FileNotFoundError
         except Exception:  # noqa: BLE001 - any load failure -> retrain from generator
-            raw = dc_synthetic.make_dataset(n=14000, seed=7, messy=True)
-            clean, _ = dc_cleaning.clean(raw)
-            models, _ = dc_train.train(clean, dc_train.TrainConfig(n_estimators=120, seed=7))
+            models = build_commit()
             _try_save(dc_train.save, models, cache, "commit")
             _state["commit"] = models
     return _state["commit"]
@@ -89,18 +125,15 @@ def _commit_models():
 
 def _eta_models():
     if _state["eta"] is None:
+        _state["eta"] = _load_bundled(eta_train.load, "eta")
+    if _state["eta"] is None:
         cache = _cache_dir()
         try:
             _state["eta"] = eta_train.load(cache / "eta") if cache else None
             if _state["eta"] is None:
                 raise FileNotFoundError
         except Exception:  # noqa: BLE001
-            raw = eta_synthetic.make_dataset(n=14000, seed=7, messy=True)
-            clean, _ = eta_cleaning.clean(raw)
-            cfg = eta_train.TrainConfig(
-                n_estimators=120, seed=7, quantiles=eta_train.PRODUCT_QUANTILES
-            )
-            models, _ = eta_train.train(clean, cfg)
+            models = build_eta()
             _try_save(eta_train.save, models, cache, "eta")
             _state["eta"] = models
     return _state["eta"]

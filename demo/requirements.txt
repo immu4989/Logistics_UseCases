@@ -3,6 +3,15 @@
 # in sync with the source and needs no vendored copies. Pin to a tag/commit for
 # reproducibility once you cut a release.
 gradio>=5,<6
+
+# Pinned to match the pre-trained models/ shipped with the Space (built by
+# build_models.py). Pickled XGBoost/scikit-learn objects load reliably only on
+# the versions that wrote them; bump these together with a fresh build_models.py.
+xgboost==3.3.0
+scikit-learn==1.9.0
+numpy==2.4.6
+joblib==1.5.3
+
 git+https://github.com/immu4989/Logistics_UseCases.git#subdirectory=delivery-commit-prediction
 git+https://github.com/immu4989/Logistics_UseCases.git#subdirectory=eta-regression
 git+https://github.com/immu4989/Logistics_UseCases.git#subdirectory=intervention-optimization
