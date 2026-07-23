@@ -90,10 +90,17 @@ def trucks_needed(stops: pd.DataFrame) -> int:
     return ceil(int(stops["packages"].sum()) / CAPACITY_PKGS)
 
 
-def _feasible(route: list[int], dist, packages, service_min) -> bool:
+def _feasible(
+    route: list[int],
+    dist,
+    packages,
+    service_min,
+    capacity: float = CAPACITY_PKGS,
+    max_route_min: float = MAX_ROUTE_MIN,
+) -> bool:
     return (
-        packages[route].sum() <= CAPACITY_PKGS
-        and route_minutes(route, dist, service_min) <= MAX_ROUTE_MIN
+        packages[route].sum() <= capacity
+        and route_minutes(route, dist, service_min) <= max_route_min
     )
 
 
@@ -157,7 +164,12 @@ def zone_fixed(stops: pd.DataFrame, dist: np.ndarray) -> Solution:
 # ---------------------------------------------------------------------------
 # Policy (b): global nearest-neighbor — greedy construction.
 # ---------------------------------------------------------------------------
-def nearest_neighbor_global(stops: pd.DataFrame, dist: np.ndarray) -> Solution:
+def nearest_neighbor_global(
+    stops: pd.DataFrame,
+    dist: np.ndarray,
+    capacity: float = CAPACITY_PKGS,
+    max_route_min: float = MAX_ROUTE_MIN,
+) -> Solution:
     """Fill trucks nearest-first, ignoring zones.
 
     A truck leaves the depot, repeatedly drives to the nearest unserved stop
@@ -165,6 +177,9 @@ def nearest_neighbor_global(stops: pd.DataFrame, dist: np.ndarray) -> Solution:
     home), and returns when nothing fits. Early trucks look great; the miles
     hide in the last trucks, which inherit whatever the greedy sweep left
     scattered across the metro.
+
+    ``capacity``/``max_route_min`` default to the fleet constants; the
+    CVRPLIB benchmark passes the instance capacity and an infinite shift.
     """
     packages = stops["packages"].to_numpy()
     service_min = stops["service_min"].to_numpy()
@@ -179,12 +194,12 @@ def nearest_neighbor_global(stops: pd.DataFrame, dist: np.ndarray) -> Solution:
             best, best_d = -1, np.inf
             for i in unserved:
                 d = dist[node, i + 1]
-                if d >= best_d or load + packages[i] > CAPACITY_PKGS:
+                if d >= best_d or load + packages[i] > capacity:
                     continue
                 # Feasibility must include the ride home, or the last stop
                 # of the day strands the driver past the end of shift.
                 drive_min = (d + dist[i + 1, 0]) / SPEED_MPH * 60.0
-                if elapsed + drive_min + service_min[i] <= MAX_ROUTE_MIN:
+                if elapsed + drive_min + service_min[i] <= max_route_min:
                     best, best_d = i, d
             if best < 0:
                 break
@@ -202,7 +217,12 @@ def nearest_neighbor_global(stops: pd.DataFrame, dist: np.ndarray) -> Solution:
 # ---------------------------------------------------------------------------
 # Policy (c): Clarke-Wright savings + 2-opt — the star.
 # ---------------------------------------------------------------------------
-def clarke_wright(stops: pd.DataFrame, dist: np.ndarray) -> list[list[int]]:
+def clarke_wright(
+    stops: pd.DataFrame,
+    dist: np.ndarray,
+    capacity: float = CAPACITY_PKGS,
+    max_route_min: float = MAX_ROUTE_MIN,
+) -> list[list[int]]:
     """Clarke-Wright parallel savings construction (1964, still the one to beat).
 
     Start with the worst legal plan: one dedicated round trip per stop.
@@ -246,10 +266,10 @@ def clarke_wright(stops: pd.DataFrame, dist: np.ndarray) -> list[list[int]]:
             b = b[::-1]
         elif b[0] != j:
             continue
-        if load[ri] + load[rj] > CAPACITY_PKGS:
+        if load[ri] + load[rj] > capacity:
             continue
         merged = a + b
-        if route_minutes(merged, dist, service_min) > MAX_ROUTE_MIN:
+        if route_minutes(merged, dist, service_min) > max_route_min:
             continue
         routes[ri] = merged
         load[ri] += load[rj]
@@ -297,9 +317,20 @@ def two_opt(route: list[int], dist: np.ndarray, max_passes: int = TWO_OPT_MAX_PA
     return list(tour[1:-1] - 1)
 
 
-def savings_2opt(stops: pd.DataFrame, dist: np.ndarray) -> Solution:
-    """Clarke-Wright construction, then 2-opt polish per route."""
-    constructed = clarke_wright(stops, dist)
+def savings_2opt(
+    stops: pd.DataFrame,
+    dist: np.ndarray,
+    capacity: float = CAPACITY_PKGS,
+    max_route_min: float = MAX_ROUTE_MIN,
+) -> Solution:
+    """Clarke-Wright construction, then 2-opt polish per route.
+
+    2-opt only reorders stops within a route, so it can never break
+    capacity, and a shorter tour can never break the duration cap either.
+    The same two calls serve both the synthetic depot day (fleet-constant
+    defaults) and the CVRPLIB benchmark (instance capacity, no shift).
+    """
+    constructed = clarke_wright(stops, dist, capacity=capacity, max_route_min=max_route_min)
     construction_miles = sum(route_miles(r, dist) for r in constructed)
     routes = [two_opt(r, dist) for r in constructed]
     return Solution("savings_2opt", routes, construction_miles=round(construction_miles, 2))

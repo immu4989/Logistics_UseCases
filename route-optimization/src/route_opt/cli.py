@@ -2,11 +2,12 @@
 
     route-opt generate --out artifacts/data/stops.csv   # one messy delivery day
     route-opt all                                        # full pipeline
+    route-opt bench                                      # CVRPLIB benchmark vs BKS
 
 Artifacts land in ./artifacts by default:
     artifacts/data/      the raw (messy) and cleaned stop lists
     artifacts/reports/   metrics.json, routes.csv, rationale.md,
-                         cleaning_report.csv, plots
+                         cleaning_report.csv, plots, bench_results.csv
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import cleaning, evaluate, explain, solve, synthetic
+from . import bench, cleaning, cvrplib, evaluate, explain, solve, synthetic
 
 
 def cmd_generate(args) -> None:
@@ -78,6 +79,30 @@ def cmd_all(args) -> None:
     )
 
 
+def cmd_bench(args) -> None:
+    names = [n.strip() for n in args.instances.split(",") if n.strip()] if args.instances else None
+    report_dir = Path(args.artifacts) / "reports"
+    print(
+        f"benchmarking Clarke-Wright + 2-opt against CVRPLIB best-known solutions "
+        f"({len(names or cvrplib.REGISTRY)} instances, cache: {args.cache_dir}) ..."
+    )
+    results = bench.run_bench(names, cache_dir=Path(args.cache_dir))
+    print(
+        f"{'instance':<12} {'cust':>5} {'ours':>7} {'bks':>7} {'gap':>7} "
+        f"{'nn gap':>8} {'routes':>7} {'time':>7}"
+    )
+    for _, r in results.iterrows():
+        print(
+            f"{r['instance']:<12} {r['customers']:>5} {r['ours']:>7,} {r['bks']:>7,} "
+            f"{r['gap_pct']:>6.1f}% {r['nn_gap_pct']:>7.1f}% {r['routes']:>7} "
+            f"{r['runtime_s']:>6.2f}s"
+        )
+    print(f"mean gap to BKS: {results['gap_pct'].mean():.1f}% "
+          f"(nearest-neighbor context: +{results['nn_gap_pct'].mean():.0f}%)")
+    bench.write_reports(results, report_dir)
+    print(f"wrote {report_dir}/bench_results.csv and {report_dir}/bench_table.md")
+
+
 def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(prog="route-opt", description=__doc__)
     sub = p.add_subparsers(dest="command", required=True)
@@ -94,6 +119,17 @@ def main(argv: list[str] | None = None) -> None:
     a.add_argument("--seed", type=int, default=7)
     a.add_argument("--artifacts", default="artifacts")
     a.set_defaults(func=cmd_all)
+
+    b = sub.add_parser("bench", help="benchmark the optimizer against CVRPLIB best-known solutions")
+    b.add_argument(
+        "--instances",
+        default=None,
+        help=f"comma-separated instance names (default: all of {', '.join(cvrplib.REGISTRY)})",
+    )
+    b.add_argument("--cache-dir", default=str(cvrplib.DEFAULT_CACHE_DIR),
+                   help="where downloaded .vrp/.sol files are cached")
+    b.add_argument("--artifacts", default="artifacts")
+    b.set_defaults(func=cmd_bench)
 
     args = p.parse_args(argv)
     try:

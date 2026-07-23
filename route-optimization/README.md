@@ -120,6 +120,45 @@ Construction does the heavy lifting because it decides WHICH stops share a truck
 2-opt then uncrosses each route's path. That 73/27 split is typical, and it tells you
 where to invest if you extend this: better assignment beats better sequencing.
 
+## 📏 Benchmarked against CVRPLIB
+
+Beating your own baselines proves nothing by itself, so the optimizer is also scored
+against [CVRPLIB](https://galgos.inf.puc-rio.br/cvrplib), the standard academic
+benchmark library for the capacitated VRP, where every instance has a best-known
+solution (BKS) — for the sets below, a proven optimum. Same code as the pipeline above
+(`solve.py`, unmodified), run under CVRPLIB's rules: instance capacity, no shift clock,
+TSPLIB-rounded integer distances, depot round trips counted the standard way.
+
+| Instance | Customers | Ours (CW+2-opt) | BKS | Gap | NN (context) | Runtime |
+|---|---:|---:|---:|---:|---:|---:|
+| A-n32-k5 | 31 | 829 | 784 | 5.7% | +46% | 0.00s |
+| A-n45-k6 | 44 | 992 | 944 | 5.1% | +57% | 0.00s |
+| A-n65-k9 | 64 | 1,265 | 1,174 | 7.8% | +49% | 0.00s |
+| A-n80-k10 | 79 | 1,838 | 1,763 | 4.2% | +33% | 0.00s |
+| B-n50-k7 | 49 | 745 | 741 | 0.5% | +40% | 0.00s |
+| B-n78-k10 | 77 | 1,257 | 1,221 | 3.0% | +44% | 0.01s |
+| X-n101-k25 | 100 | 28,936 | 27,591 | 4.9% | +52% | 0.01s |
+| X-n153-k22 | 152 | 22,607 | 21,220 | 6.5% | +42% | 0.01s |
+| **mean** | | | | **4.7%** | +45% | |
+
+Reproduce it (downloads ~8 instances into `data/cvrplib/` on first run, offline after):
+
+```bash
+route-opt bench
+```
+
+What the gap means, stated honestly: this optimizer leaves **0.5–7.8% on the table
+against solutions nobody has ever beaten**, instances from 31 to 152 customers,
+milliseconds per instance. Production engines close most of that gap — OR-Tools'
+guided local search or LKH-3 typically land within 0–2% of BKS given seconds to
+minutes — and if a percent of miles pays for a dependency, use them. What they don't
+give you is a solver you can read: the price of "a page of auditable numpy, zero
+dependencies, deterministic" is now a measured ~5% mean, not a hand wave. The
+nearest-neighbor column is the same context as in the pipeline above: the simple
+greedy everybody tries first is 33–57% above optimal on these instances, and the
+distance from NN to Clarke-Wright + 2-opt is far larger than the distance from
+Clarke-Wright + 2-opt to perfect.
+
 ## 🧠 Design decisions that make or break routing projects
 
 **Why Clarke-Wright + 2-opt and not a MIP solver.** An exact CVRP formulation at 600
@@ -184,9 +223,14 @@ src/route_opt/
                  shared constraint checks, degree-based lower bound
   evaluate.py    per-policy miles/trucks/hours/$, route maps, bar charts
   explain.py     dispatch sheets with load + clock, savings attribution
-  cli.py         route-opt generate | all
+  cvrplib.py     TSPLIB parser, instance registry + fetch, adapter running
+                 the same solver under CVRPLIB rules
+  bench.py       gap-to-BKS benchmark, bench_results.csv + markdown table
+  cli.py         route-opt generate | all | bench
 tests/           stops served exactly once, capacity + shift respected,
-                 optimizer margin on two seeds, 2-opt monotone, bound holds
+                 optimizer margin on two seeds, 2-opt monotone, bound holds;
+                 CVRPLIB parser + BKS-cost round-trip + gap on a committed
+                 instance (tests/data/A-n32-k5, attributed)
 ```
 
 </details>
