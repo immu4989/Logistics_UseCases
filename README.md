@@ -252,11 +252,11 @@ and 3.12.
 
 ## Contributing
 
-Suggestions and contributions are welcome. Open an issue describing the operational
-question, the data you'd model it on (public or synthetic), and the decision it informs.
-New use cases should follow the two invariants above and register themselves in the CI
-matrix. Ideas on the roadmap: demand/volume forecasting for hub staffing, dynamic
-promise-date quoting at checkout, and claims-cost modeling.
+Suggestions and contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for
+the use-case checklist, the real-data adapter rules, and the environment gotchas.
+Open an issue describing the operational question, the data you'd model it on (public
+or synthetic), and the decision it informs. The repo is citable via
+[CITATION.cff](CITATION.cff).
 
 ## License
 

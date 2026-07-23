@@ -1,0 +1,31 @@
+cff-version: 1.2.0
+message: "If you use this repository in your research or product work, please cite it as below."
+title: "Shipping and Logistics Use Cases: end-to-end machine learning for parcel and freight operations"
+type: software
+authors:
+  - family-names: "Ahamed"
+    given-names: "Imran"
+repository-code: "https://github.com/immu4989/Logistics_UseCases"
+url: "https://github.com/immu4989/Logistics_UseCases"
+license: Apache-2.0
+date-released: "2026-07-15"
+version: "1.0.0"
+keywords:
+  - logistics
+  - supply-chain
+  - on-time-delivery
+  - machine-learning
+  - explainable-ai
+  - shap
+  - forecasting
+  - vehicle-routing
+  - predictive-maintenance
+  - newsvendor
+abstract: >-
+  Twelve self-contained, end-to-end machine learning use cases for the shipping and
+  logistics industry: delivery-commitment risk, quantile ETAs, intervention
+  optimization, network anomaly detection, volume forecasting, route optimization,
+  dynamic pricing, predictive maintenance, address resolution, returns prediction,
+  capacity planning, and exception triage. Each includes a synthetic generator with a
+  documented ground-truth process, audited cleaning, honest operational baselines,
+  evaluation in operational units, and explainability grounded by tests.
