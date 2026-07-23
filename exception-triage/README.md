@@ -18,10 +18,10 @@ This project routes tickets to six resolution queues with a classifier, then
 does the part that actually matters: a **confidence gate** that auto-routes
 only the tickets the model is sure about and reserves humans for the ones that
 need them. It is modeled on the direction the industry has publicly committed
-to; FedEx, for one, has stated it expects AI agents to handle exception
-management and shipment monitoring across more than half of its operational
-workflows by 2028. This repo is an independent, synthetic-data study of that
-idea, affiliated with nobody.
+to: major carriers have signalled they expect AI agents to handle exception
+management and shipment monitoring across a large share of operational
+workflows in the coming years. This repo is an independent, synthetic-data
+study of that idea, affiliated with nobody.
 
 One command runs the entire journey, no data downloads, about a minute on a laptop:
 

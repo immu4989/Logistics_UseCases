@@ -8,9 +8,9 @@
 ![Dependencies](https://img.shields.io/badge/deps-numpy%20%C2%B7%20pandas%20%C2%B7%20matplotlib-purple)
 ![Lint](https://img.shields.io/badge/lint-ruff-red)
 
-UPS built ORION and reports saving on the order of 100 million miles a year with it;
-FedEx runs its own dynamic route optimization. Both projects are the inspiration here,
-and both answer the same deceptively simple question this use case makes measurable:
+UPS built ORION and reports saving on the order of 100 million miles a year with it, and
+other large carriers run their own dynamic route optimization. That work is the
+inspiration here, and it answers the same deceptively simple question this use case makes measurable:
 your depot already delivers every package every day, so how many of today's miles are
 the routing rather than the geography? This project routes one identical delivery day
 three ways under identical fleet constraints, prices the difference in dollars, and

@@ -127,7 +127,7 @@ Full write-up: [network-anomaly-detection/README.md](network-anomaly-detection/R
 
 ## 📈 Volume forecasting
 
-Modeled on the forecasting programs at FedEx, DHL and Amazon: daily inbound volume for
+Modeled on the demand-forecasting programs large carriers and marketplaces run: daily inbound volume for
 15 hubs with holidays, promo shocks and a December peak, forecast as P10/P50/P80/P90
 quantiles with split-conformal calibration. XGBoost lands at **7.5% WAPE vs 16.2%** for
 the same-weekday-last-week rule every ops floor uses, and stays at 7.1% through the peak
@@ -140,7 +140,7 @@ Full write-up: [volume-forecasting/README.md](volume-forecasting/README.md)
 
 ## 🗺️ Route optimization
 
-A dependency-free Clarke-Wright + 2-opt router (inspired by UPS ORION and FedEx DRO)
+A dependency-free Clarke-Wright + 2-opt router (inspired by UPS ORION and similar carrier route-optimization programs)
 against the honest comparator: package-balanced fixed zones, which is how most depots
 actually run. Same 592 stops, same 7 trucks, same constraints: **8.1% fewer miles,
 about $17,000/year per depot**, with a dispatch-sheet rationale per route and a lower
@@ -227,8 +227,8 @@ router versus an honestly-written rules baseline (the comparator earns the model
 job): **78.5% vs 61.8% accuracy**, evaluated in cost-weighted delay-days, where the
 logistic model beats the rules on accuracy yet loses on cost. The product is the
 confidence gate, not full automation: **auto-route 46.7% of tickets at 97% accuracy**
-and reserve humans for the tickets that need them. Modeled on FedEx's stated direction
-of AI agents across half its operational workflows.
+and reserve humans for the tickets that need them. Modeled on the major carriers' stated
+direction of putting AI agents across a large share of operational workflows.
 
 ![Automation curve](exception-triage/docs/img/automation_curve.png)
 
