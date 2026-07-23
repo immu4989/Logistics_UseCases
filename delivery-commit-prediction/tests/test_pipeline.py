@@ -91,6 +91,36 @@ def test_shap_recovers_true_drivers(trained, tmp_path):
     assert len(noise_rank) == 0 or noise_rank[0] > 7
 
 
+def test_true_risk_column_never_reaches_the_model():
+    """`p_miss_true` (return_true_risk=True) must stay out of the model matrix.
+
+    The column is the generator's pre-Bernoulli miss probability, exposed only
+    for downstream counterfactual evaluation (operational-loop). Feeding it to
+    a model would be perfect label leakage, so the whitelist in
+    features.to_matrix must drop it silently — even after cleaning and
+    feature engineering, and even in messy mode where rows get duplicated.
+    """
+    from delivery_commit import features
+
+    plain = synthetic.make_dataset(n=1500, seed=5)
+    assert "p_miss_true" not in plain.columns  # default behavior unchanged
+
+    df = synthetic.make_dataset(n=1500, seed=5, messy=True, return_true_risk=True)
+    assert "p_miss_true" in df.columns
+    assert df["p_miss_true"].between(0, 1).all()
+
+    clean_df, _ = cleaning.clean(df)
+    assert "p_miss_true" in clean_df.columns  # survives cleaning for downstream use
+    X = features.to_matrix(features.engineer(clean_df))
+    assert not any("p_miss_true" in c for c in X.columns)
+
+    # And the matrix is IDENTICAL to the one built without the column: the
+    # flag may not perturb modeling in any way.
+    clean_plain, _ = cleaning.clean(synthetic.make_dataset(n=1500, seed=5, messy=True))
+    X_plain = features.to_matrix(features.engineer(clean_plain))
+    pd.testing.assert_frame_equal(X, X_plain)
+
+
 def test_score_roundtrip(trained, tmp_path):
     from delivery_commit import features
 

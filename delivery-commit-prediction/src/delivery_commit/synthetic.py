@@ -75,8 +75,18 @@ def make_dataset(
     start_date: str = "2025-01-06",
     n_days: int = 180,
     messy: bool = False,
+    return_true_risk: bool = False,
 ) -> pd.DataFrame:
-    """Generate `n` shipments over `n_days`, returning the canonical schema."""
+    """Generate `n` shipments over `n_days`, returning the canonical schema.
+
+    With ``return_true_risk=True`` the frame carries an extra ``p_miss_true``
+    column: the generator's sigmoid(logit) BEFORE the Bernoulli draw, i.e. the
+    true miss probability of each shipment. It exists for downstream
+    counterfactual evaluation (e.g. the repo's operational-loop demo, which
+    prices what a perfect model would be worth). It is NOT part of the schema
+    and ``features.to_matrix`` never feeds it to a model — that exclusion is
+    asserted in tests.
+    """
     rng = np.random.default_rng(seed)
 
     day_offsets = rng.integers(0, n_days, n)
@@ -191,6 +201,12 @@ def make_dataset(
             schema.LABEL_COL: missed,
         }
     )
+
+    if return_true_risk:
+        # True miss probability, pre-Bernoulli. Added before the mess injection
+        # so duplicated rows carry it consistently. Excluded from modeling by
+        # the whitelist in features.to_matrix.
+        df["p_miss_true"] = p_miss.round(6)
 
     if messy:
         df = _inject_mess(df, rng)
