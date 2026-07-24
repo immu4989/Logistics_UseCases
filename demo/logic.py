@@ -44,11 +44,31 @@ from intervention_opt import synthetic as iv_synthetic
 # where the app trains on demand and caches instead — see _commit_models.
 BUNDLED = Path(__file__).parent / "models"
 MODEL_CACHE = Path(__file__).parent / ".model_cache"
-INK = "#2b6cb0"
-BAD = "#c53030"
-GOOD = "#2f855a"
+
+# Dark palette: the app is forced to dark mode (see app.py), so figures render
+# transparent with light foreground and brightened accent colors that pop on a
+# dark card.
+INK = "#60a5fa"      # blue accent (oracle / interval)
+BAD = "#f87171"      # raises risk
+GOOD = "#4ade80"     # lowers risk / the winning policy
+NEUTRAL = "#94a3b8"  # inert bars
+FG = "#e5e7eb"       # text, ticks, labels
+GRID = "#334155"     # spines, gridlines
 
 _state: dict = {"commit": None, "eta": None, "shap": None, "iv_day": None}
+
+
+def _style_dark(fig, axes) -> None:
+    """Make a figure blend into the dark UI: transparent canvas, light text."""
+    fig.patch.set_alpha(0.0)
+    for ax in (axes if isinstance(axes, (list, tuple)) else [axes]):
+        ax.set_facecolor("none")
+        ax.title.set_color(FG)
+        ax.xaxis.label.set_color(FG)
+        ax.yaxis.label.set_color(FG)
+        ax.tick_params(colors=FG)
+        for spine in ax.spines.values():
+            spine.set_color(GRID)
 
 
 def _cache_dir():
@@ -219,9 +239,10 @@ def score_commit(*inputs):
     ax.barh(range(len(top)), top.values, color=colors)
     ax.set_yticks(range(len(top)))
     ax.set_yticklabels([_pretty(c) for c in top.index], fontsize=9)
-    ax.axvline(0, color="0.3", lw=0.8)
+    ax.axvline(0, color=FG, lw=0.8, alpha=0.6)
     ax.set_xlabel("push toward missing  →   (log-odds contribution)   ←  push toward on-time")
     ax.set_title("Why this shipment scored the way it did")
+    _style_dark(fig, ax)
     fig.tight_layout()
 
     verdict = "high risk" if prob >= 0.35 else "elevated" if prob >= 0.15 else "low risk"
@@ -267,11 +288,11 @@ def predict_eta(*inputs):
     promise = math.ceil(p90)
 
     fig, ax = plt.subplots(figsize=(7, 1.9))
-    ax.hlines(0, p10, p90, color=INK, lw=6, alpha=0.35)
+    ax.hlines(0, p10, p90, color=INK, lw=6, alpha=0.5)
     ax.plot(p50, 0, "o", color=INK, ms=12)
     for x, lab in [(p10, f"P10\n{p10:.1f}d"), (p50, f"P50\n{p50:.1f}d"), (p90, f"P90\n{p90:.1f}d")]:
         ax.annotate(lab, (x, 0), textcoords="offset points", xytext=(0, 12),
-                    ha="center", fontsize=9)
+                    ha="center", fontsize=9, color=FG)
     ax.axvline(promise, color=GOOD, ls="--", lw=1.5)
     ax.annotate(f"promise {promise}d", (promise, 0), textcoords="offset points",
                 xytext=(0, -22), ha="center", color=GOOD, fontsize=9)
@@ -279,6 +300,7 @@ def predict_eta(*inputs):
     ax.set_yticks([])
     ax.set_xlabel("transit days")
     ax.set_title("Predicted transit-time interval")
+    _style_dark(fig, ax)
     fig.tight_layout()
 
     label = (
@@ -321,20 +343,21 @@ def run_budget(budget: float):
     fig, ax = plt.subplots(figsize=(7.5, 4.2))
     net = comp["net_savings_usd"].to_numpy()
     colors = [
-        GOOD if p == "expected_value_greedy" else "0.55" if p != "oracle" else INK
+        GOOD if p == "expected_value_greedy" else NEUTRAL if p != "oracle" else INK
         for p in comp.index
     ]
     ax.bar(range(len(comp)), net, color=colors)
     ax.set_xticks(range(len(comp)))
     ax.set_xticklabels([_POLICY_LABELS[p] for p in comp.index], rotation=20, ha="right", fontsize=9)
-    ax.axhline(0, color="0.3", lw=0.8)
+    ax.axhline(0, color=FG, lw=0.8, alpha=0.6)
     ax.set_ylabel("net savings on the day ($)")
     ax.set_title(f"Every policy, same ${budget:,.0f} budget")
     for i, v in enumerate(net):
         va = "bottom" if v >= 0 else "top"
         ax.annotate(f"${v:,.0f}", (i, v), textcoords="offset points",
-                    xytext=(0, 4 if v >= 0 else -6), ha="center", va=va, fontsize=8)
+                    xytext=(0, 4 if v >= 0 else -6), ha="center", va=va, fontsize=8, color=FG)
     ax.margins(y=0.15)
+    _style_dark(fig, ax)
     fig.tight_layout()
 
     tbl = comp.reset_index()

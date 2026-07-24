@@ -60,8 +60,24 @@ demo; the repo's reported numbers come from full runs.
 """
 
 
+# Force dark mode on load: the plots are styled for a dark canvas, so we pin the
+# theme rather than follow the visitor's system preference. One redirect on first
+# load stamps ?__theme=dark, then the guard makes it a no-op.
+FORCE_DARK = """
+() => {
+  const u = new URL(window.location.href);
+  if (u.searchParams.get('__theme') !== 'dark') {
+    u.searchParams.set('__theme', 'dark');
+    window.location.replace(u.href);
+  }
+}
+"""
+
+
 def build() -> gr.Blocks:
-    with gr.Blocks(title="Shipping & Logistics ML demo", theme=gr.themes.Soft()) as demo:
+    with gr.Blocks(
+        title="Shipping & Logistics ML demo", theme=gr.themes.Soft(), js=FORCE_DARK
+    ) as demo:
         gr.Markdown(INTRO)
 
         with gr.Tab("Score a shipment"):
