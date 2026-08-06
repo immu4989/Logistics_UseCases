@@ -47,6 +47,9 @@ Two environment gotchas that will bite you otherwise:
 - **shap/xgboost pairing:** `shap>=0.52` (needed for xgboost 3.x models) only ships for
   Python >= 3.12. Copy the environment-marker dependency block from
   `delivery-commit-prediction/pyproject.toml` verbatim if your use case uses SHAP.
+- **Pin the linter.** `ruff` is pinned below the next minor in every dev extra: new
+  ruff minors ship stricter defaults and break all 28 CI jobs at once (0.16 did
+  exactly that). Bump the pin deliberately, in its own PR, fixing new findings.
 - **pandas 3.x strings:** the default string dtype is `str`, not `object`. Use
   `pd.api.types.is_string_dtype(...)`, never `dtype == object`.
 

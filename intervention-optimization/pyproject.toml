@@ -27,7 +27,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0", "ruff>=0.4"]
+dev = ["pytest>=7.0", "ruff>=0.4,<0.16"]
 
 [project.scripts]
 intervention-opt = "intervention_opt.cli:main"
