@@ -6,7 +6,7 @@
 [![Open in Spaces](https://huggingface.co/datasets/huggingface/badges/resolve/main/open-in-hf-spaces-sm.svg)](https://huggingface.co/spaces/immu4989/Logistics-UseCases-Demo)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![License](https://img.shields.io/badge/license-Apache--2.0-green)
-![Use cases](https://img.shields.io/badge/use%20cases-12%20ready-brightgreen)
+![Use cases](https://img.shields.io/badge/use%20cases-13%20ready-brightgreen)
 ![Explainability](https://img.shields.io/badge/every%20model-explained%20%26%20tested-purple)
 
 > 🤖 **Looking for the agentic-AI versions of these problems?** LLM agents with verified
@@ -41,6 +41,7 @@ and **watch** the network and the fleet for drift before the monthly report sees
 | [↩️ returns-prediction](returns-prediction/) | Which orders come back, why, and which returns are worth preventing before the parcel ships? | ✅ Ready |
 | [🚂 capacity-planning](capacity-planning/) | How many linehaul trailers do you book a week ahead, priced by the cost of guessing wrong in each direction? | ✅ Ready |
 | [🎫 exception-triage](exception-triage/) | Which resolution team should each stuck-shipment ticket go to, and which tickets can route themselves? | ✅ Ready |
+| [🧬 uplift-modeling](uplift-modeling/) | Which shipments actually *benefit* from an intervention — targeting by treatment effect instead of risk? | ✅ Ready |
 
 Every use case runs end-to-end on synthetic data with one command, in about a minute,
 with no proprietary data and no downloads:
@@ -141,12 +142,14 @@ Full write-up: [volume-forecasting/README.md](volume-forecasting/README.md)
 
 ## 🗺️ Route optimization
 
-A dependency-free Clarke-Wright + 2-opt router (inspired by UPS ORION and similar carrier route-optimization programs)
-against the honest comparator: package-balanced fixed zones, which is how most depots
-actually run. Same 592 stops, same 7 trucks, same constraints: **8.1% fewer miles,
-about $17,000/year per depot**, with a dispatch-sheet rationale per route and a lower
-bound for context. Bonus finding: naive global nearest-neighbor can *lose* to
-well-balanced zones — greedy isn't optimization.
+A dependency-free router (inspired by UPS ORION and similar carrier route-optimization
+programs) built the way modern heuristic solvers are: Clarke-Wright construction, then a
+local-search stack (2-opt, or-opt, inter-route 2-opt*, swap) under deterministic
+iterated local search. Against package-balanced fixed zones — the honest comparator,
+because it's how depots actually run — same 592 stops, same 7 trucks: **11.6% fewer
+miles, about $24,000/year per depot**. Benchmarked on CVRPLIB's proven optima: **2.2%
+mean gap, two instances solved to optimality**. Bonus finding: naive global
+nearest-neighbor can *lose* to well-balanced zones — greedy isn't optimization.
 
 ![Route maps](route-optimization/docs/img/route_maps.png)
 
@@ -285,6 +288,41 @@ that breaks tree models and miscalibrates intervals), predictive-maintenance on 
 AI4I 2020 dataset (PR-AUC 0.78 at a 3.4% base rate, with the model recovering the
 dataset's documented failure-mode physics), and route-optimization benchmarked against
 CVRPLIB's proven optima (**4.7% mean gap** across 8 standard instances).
+
+## 🧬 Uplift modeling
+
+The riskiest shipment is not the one you can save. Use case #13 is the causal-ML
+upgrade to everything above: a randomized-pilot generator with documented heterogeneous
+treatment effects, S/T/DR-learners scored with exact Qini curves against known ground
+truth. At a 10% targeting depth, **uplift-based targeting earns +$643 where risk-based
+targeting loses $1,553** — because the highest-risk segment (weather-driven misses) has
+*zero* treatable uplift, and the model learns that. Includes an owned upset: the simple
+S-learner beats the DR-learner in this RCT regime, with the explanation of what DR's
+robustness buys instead on observational data.
+
+![Qini curves](uplift-modeling/docs/img/qini_curves.png)
+
+Full write-up: [uplift-modeling/README.md](uplift-modeling/README.md)
+
+## 🔬 State-of-the-art notes
+
+Beyond the thirteen use cases, four modern techniques are wired in where they earn
+their keep, each with measured results rather than claims:
+
+- **Conformal risk control** ([delivery-commit-prediction](delivery-commit-prediction/)):
+  distribution-free flagging guarantees — a 90%-capture contract realizes 97% on the
+  held-out month, and the README is honest that CRC *prices* the promise (77% flag rate)
+  rather than improving the model.
+- **Foundation-model benchmark** ([volume-forecasting](volume-forecasting/)): zero-shot
+  Chronos-Bolt vs the covariate-aware XGBoost under rolling-origin evaluation. XGBoost
+  wins 15/15 hubs; bolt-small beats seasonal-naive overall but collapses in peak — the
+  zero-shot-vs-covariates tradeoff, measured both ways.
+- **Metaheuristic routing** ([route-optimization](route-optimization/)): the local-search
+  + ILS stack closes the CVRPLIB gap to 2.2% mean against proven optima, still pure
+  numpy, still byte-deterministic.
+- **Models as MCP tools** ([demo](demo/)): the live Space doubles as an MCP server, so
+  agents can call `score_commit`, `predict_eta`, and `run_budget` as typed tools at
+  `https://immu4989-logistics-usecases-demo.hf.space/gradio_api/mcp/`.
 
 ## Repository conventions
 
