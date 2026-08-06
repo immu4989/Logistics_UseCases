@@ -36,6 +36,8 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 
+from . import conformal as conformal_mod
+
 
 def decile_lift(y_true: np.ndarray, y_prob: np.ndarray) -> pd.DataFrame:
     df = pd.DataFrame({"y": y_true, "p": y_prob}).sort_values("p", ascending=False)
@@ -93,6 +95,86 @@ def evaluate_models(models, splits, out_dir: str | Path, flag_frac: float = 0.10
     _plot_calibration(y_test, probs, out_dir / "calibration.png")
     _plot_lift(y_test, probs["xgboost"], out_dir / "lift_by_decile.png")
     return results
+
+
+def conformal_report(models, splits, out_dir: str | Path) -> dict | None:
+    """Evaluate the conformal layer on the held-out period.
+
+    Writes crc_table.csv (target vs realized miss capture and the flag-rate
+    cost at each alpha) plus one plot, and returns {"table", "brier"} for the
+    CLI. Returns None for pre-conformal model artifacts (getattr, because old
+    pickles predate the fields).
+
+    Reminder when reading the table: the CRC guarantee is on the EXPECTED FNR
+    under exchangeability of calibration and deployment shipments; a single
+    test period's realized capture is one draw around the target, not the
+    guarantee itself.
+    """
+    calibrator = getattr(models, "calibrator", None)
+    thresholds = getattr(models, "crc_thresholds", None)
+    if calibrator is None or not thresholds:
+        return None
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    X_test, y_test = splits["X_test"], splits["y_test"]
+    p_raw = models.xgb.predict_proba(X_test)[:, 1]
+    p_cal = calibrator.predict_proba(X_test)[:, 1]
+
+    # Thresholds live on the raw-score scale (see train.py: CRC on the raw
+    # ranking, isotonic only for probability levels).
+    table = conformal_mod.crc_report(thresholds, p_raw, y_test)
+    table.to_csv(out_dir / "crc_table.csv", index=False)
+    brier = {
+        "raw": float(brier_score_loss(y_test, p_raw)),
+        "calibrated": float(brier_score_loss(y_test, p_cal)),
+    }
+    _plot_crc(table, out_dir / "crc_guarantee.png")
+    return {"table": table, "brier": brier}
+
+
+def _plot_crc(table: pd.DataFrame, path: Path) -> None:
+    """Realized miss capture vs the CRC target, with the flag-rate cost."""
+    fig, ax = plt.subplots(figsize=(7, 4.5))
+    x = np.arange(len(table))
+    ax.bar(x, table["realized_capture"], width=0.55, color="#2b6cb0", label="realized capture")
+    ax.plot(
+        x,
+        table["target_capture"],
+        ls="none",
+        marker="_",
+        ms=42,
+        mew=2.5,
+        color="#c05621",
+        label="guaranteed expected capture (1 - alpha)",
+    )
+    for i, row in table.iterrows():
+        ax.text(
+            i,
+            row["realized_capture"] + 0.012,
+            f"{row['realized_capture']:.1%}",
+            ha="center",
+            fontsize=9,
+        )
+        ax.text(
+            i,
+            0.04,
+            f"flags {row['flag_rate']:.0%}\nof shipments",
+            ha="center",
+            fontsize=8,
+            color="white",
+        )
+    ax.set_xticks(x)
+    ax.set_xticklabels([f"alpha = {a:.2f}" for a in table["alpha"]])
+    ax.set_ylim(0, 1.08)
+    ax.set_ylabel("Share of actual misses flagged")
+    ax.set_title("CRC guarantee vs held-out period: capture and its flag-rate cost", pad=30)
+    ax.legend(
+        loc="lower center", bbox_to_anchor=(0.5, 1.0), ncols=2, fontsize=8, frameon=False
+    )
+    fig.tight_layout()
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
 
 
 def _plot_calibration(y_test, probs: dict, path: Path) -> None:

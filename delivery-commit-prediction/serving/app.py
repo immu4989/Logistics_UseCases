@@ -92,11 +92,14 @@ def score(req: ScoreRequest) -> dict:
     X = X.reindex(columns=models.feature_columns, fill_value=0.0)
     probs = models.xgb.predict_proba(X)[:, 1]
 
-    out = (
-        pd.DataFrame(
-            {schema.ID_COL: clean_df[schema.ID_COL], "miss_probability": probs.round(6)}
-        )
-        .sort_values("miss_probability", ascending=False)
-        .to_dict(orient="records")
+    ranked = pd.DataFrame(
+        {schema.ID_COL: clean_df[schema.ID_COL], "miss_probability": probs.round(6)}
     )
+    # Isotonic-calibrated probability, when the artifact carries the conformal
+    # layer (getattr: pre-conformal pickles lack the attribute). The ranking
+    # stays on the raw score; calibration is monotone, so order is unchanged.
+    calibrator = getattr(models, "calibrator", None)
+    if calibrator is not None:
+        ranked["miss_probability_calibrated"] = calibrator.predict_proba(X)[:, 1].round(6)
+    out = ranked.sort_values("miss_probability", ascending=False).to_dict(orient="records")
     return {"scored": len(out), "trained_through": models.cutoff_date, "results": out}

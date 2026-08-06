@@ -45,23 +45,23 @@ def cmd_all(args) -> None:
     data_dir, model_dir, report_dir = art / "data", art / "models", art / "reports"
     data_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"[1/5] loading raw data (source={args.source}) ...")
+    print(f"[1/6] loading raw data (source={args.source}) ...")
     raw = _load_raw(args)
     raw.to_csv(data_dir / "raw.csv", index=False)
     print(f"      {len(raw):,} rows, miss rate {raw[schema.LABEL_COL].mean():.1%}")
 
-    print("[2/5] cleaning ...")
+    print("[2/6] cleaning ...")
     clean_df, report = cleaning.clean(raw)
     clean_df.to_csv(data_dir / "clean.csv", index=False)
     report.to_frame().to_csv(data_dir / "cleaning_report.csv", index=False)
     print(str(report))
 
-    print("[3/5] training (logistic baseline + XGBoost, time-based split) ...")
+    print("[3/6] training (logistic baseline + XGBoost, time-based split) ...")
     models, splits = train_mod.train(clean_df, train_mod.TrainConfig(seed=args.seed))
     path = train_mod.save(models, model_dir)
     print(f"      trained on ship dates <= {models.cutoff_date}; models -> {path}")
 
-    print("[4/5] evaluating on the held-out period ...")
+    print("[4/6] evaluating on the held-out period ...")
     results = evaluate.evaluate_models(models, splits, report_dir)
     for name in ["logistic_baseline", "xgboost"]:
         m = results[name]
@@ -71,11 +71,28 @@ def cmd_all(args) -> None:
             f"recall@{m['flag_frac']:.0%}-flagged {m['recall_at_flag']:.1%}"
         )
 
-    print("[5/5] SHAP driver analysis ...")
+    print("[5/6] SHAP driver analysis ...")
     ranking = explain.explain(models, splits, report_dir)
     print("      top drivers (share of model explanation):")
     for _, row in ranking.head(8).iterrows():
         print(f"        {row['driver']:<28} {row['share_of_explanation']:.1%}")
+
+    print("[6/6] conformal guarantees (isotonic calibration + CRC flag thresholds) ...")
+    conf = evaluate.conformal_report(models, splits, report_dir)
+    if conf is None:
+        print("      model artifact predates the conformal layer; retrain to enable")
+    else:
+        b = conf["brier"]
+        print(f"      Brier score: raw {b['raw']:.4f} -> calibrated {b['calibrated']:.4f}")
+        print("      expected-FNR guarantee vs the held-out period (in-expectation, "
+              "exchangeability assumed):")
+        print("        alpha  threshold  target capture  realized capture  flag rate")
+        for _, r in conf["table"].iterrows():
+            print(
+                f"        {r['alpha']:>5.2f}  {r['threshold']:>9.3f}  "
+                f"{r['target_capture']:>14.0%}  {r['realized_capture']:>16.1%}  "
+                f"{r['flag_rate']:>9.1%}"
+            )
     print(f"\ndone. reports -> {report_dir}")
 
 

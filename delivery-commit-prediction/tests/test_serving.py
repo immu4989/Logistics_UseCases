@@ -66,6 +66,15 @@ def test_score_returns_ranked_probabilities(client):
     assert probs == sorted(probs, reverse=True)
 
 
+def test_score_includes_calibrated_probability(client):
+    # Artifacts trained by the current pipeline carry the conformal layer, so
+    # /score also returns the isotonic-calibrated probability.
+    r = client.post("/score", json={"shipments": _example_shipments(4)})
+    assert r.status_code == 200
+    for row in r.json()["results"]:
+        assert 0.0 <= row["miss_probability_calibrated"] <= 1.0
+
+
 def test_score_rejects_missing_columns(client):
     r = client.post("/score", json={"shipments": [{"shipment_id": "X", "ship_date": "2025-01-01"}]})
     assert r.status_code == 422

@@ -29,8 +29,10 @@ flowchart LR
     D --> E["Logistic baseline<br/>+ XGBoost"]
     E --> F["Evaluation<br/>PR-AUC · lift · calibration"]
     E --> G["SHAP driver<br/>analysis"]
+    E --> I["Conformal layer<br/>isotonic + CRC<br/>flag thresholds"]
     F --> H[("artifacts/reports/<br/>metrics, plots,<br/>per-shipment explanations")]
     G --> H
+    I --> H
 ```
 
 ## 🎯 The headline numbers
@@ -130,6 +132,66 @@ signature flags). The test suite asserts SHAP recovers the real drivers and buri
 noise. If a refactor silently breaks explanations, **CI fails**. When you adapt this to
 your own data, keep the synthetic harness: it's your regression test for the whole
 explanation stack.
+
+## 🛡️ Flagging with guarantees (conformal risk control)
+
+Everything above is capacity-first: ops can work 10% of shipments, so we flag the
+riskiest 10% and capture ~36% of misses. Some programs need the opposite contract,
+coverage-first: *"whatever it costs, tomorrow's flag list must capture at least 90% of
+the misses."* Conformal risk control (Angelopoulos et al. 2022) turns the model's
+ranking into exactly that contract, with a finite-sample guarantee instead of a hope.
+
+The precise statement, because precision is the product here: on a recent calibration
+slice with `n` actual misses, [conformal.py](src/delivery_commit/conformal.py) picks the
+largest score threshold that misses at most `floor((n+1)·alpha − 1)` of them. If
+calibration and deployment shipments are exchangeable, the **expected** false-negative
+rate of the flag rule is at most `alpha`. No asymptotics, no distributional assumptions
+on the scores, and the derivation is spelled out step by step in the module.
+
+Measured on the held-out final month (1,728 actual misses, thresholds fitted on 556
+calibration misses the test period never saw):
+
+| Target capture (1 − alpha) | Realized capture | Flag rate |
+|---:|---:|---:|
+| ≥ 95% expected | 98.7% | 87.9% of shipments |
+| ≥ 90% expected | 97.0% | 77.1% of shipments |
+| ≥ 80% expected | 91.8% | 61.7% of shipments |
+
+![CRC guarantee vs realized](docs/img/crc_guarantee.png)
+
+Read the right column first. A hard 90% capture costs flagging three quarters of all
+shipments, because a model whose top decile captures 36% of misses simply cannot cover
+90% of them cheaply. That is the honest value of CRC: it **prices the promise**. The
+capacity list stays the workhorse for expensive interventions (reroutes, upgrades); the
+CRC list is for cheap blanket ones (a proactive "your package may be delayed" notice),
+or for showing a stakeholder in one table that the guarantee they asked for is not
+affordable at current model strength.
+
+How is this different from "we picked a threshold that worked last month"? A backtested
+threshold carries no statement about next month; when it fails, you learn nothing except
+that it failed. The CRC threshold carries a guarantee with its assumptions printed on
+the label, so when it breaks you know exactly which assumption to check.
+
+**The isotonic calibration note.** The same calibration slice fits an isotonic map from
+raw scores to calibrated probabilities (returned by the scoring service as
+`miss_probability_calibrated`). On this pipeline it barely moves Brier (0.1005 raw vs
+0.1014 calibrated) precisely because we never reweight classes, so raw probabilities are
+already honest. It earns its keep the day you must reweight for a rarer miss rate, or
+the day levels drift: the calibrator fits on the most *recent* slice of training time,
+because drift voids probability levels before it voids the ranking. CRC itself
+thresholds the raw score: isotonic's flat segments would drag whole plateaus into the
+flag set (~77% flagged instead of ~62% at the same guarantee).
+
+**The honest limits.** The guarantee is on the FNR *in expectation across days*, not per
+day: any single morning's realized capture fluctuates around the target (the table
+over-delivers on this particular month; that surplus is paid for in flag-list size). It
+holds *under exchangeability* between calibration and deployment shipments, and regime
+shifts break exchangeability: the Olist truckers' strike below is the canonical
+violation, and no conformal method survives it. And the calibration slice here doubles
+as the early-stopping slice (commented in [train.py](src/delivery_commit/train.py)), a
+deliberate small optimism accepted to avoid burning a third time window. The operational
+consequence of all three: refit the calibrator and thresholds on a frequent cadence, and
+treat a drift alert as "the guarantee is suspended", not "the guarantee will save us".
 
 ## 🚚 Run it on real data (Olist)
 
@@ -236,6 +298,7 @@ src/delivery_commit/
   cleaning.py    audited cleaning: duplicates, sentinels, bounds, imputation
   features.py    feature engineering, time-based split, model matrix
   train.py       logistic baseline + XGBoost with early stopping
+  conformal.py   isotonic calibration + conformal risk control (FNR-guaranteed flag list)
   evaluate.py    PR-AUC, calibration, decile lift, capacity-threshold metrics
   explain.py     SHAP global + local reports, driver ranking vs ground truth
   olist.py       adapter: public Olist dataset -> canonical schema

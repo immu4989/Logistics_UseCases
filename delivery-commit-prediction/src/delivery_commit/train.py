@@ -29,7 +29,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from xgboost import XGBClassifier
 
-from . import features, schema
+from . import conformal, features, schema
 
 
 @dataclass
@@ -53,6 +53,11 @@ class TrainedModels:
     feature_columns: list[str]
     cutoff_date: str
     config: TrainConfig
+    # Conformal layer (None-defaults keep pre-conformal pickles loadable;
+    # consumers must use getattr(..., None) because unpickling a dataclass
+    # bypasses __init__ and old artifacts simply lack these attributes).
+    calibrator: conformal.CalibratedScorer | None = None
+    crc_thresholds: dict[float, conformal.CRCThreshold] | None = None
 
 
 def train(df_clean: pd.DataFrame, config: TrainConfig | None = None) -> tuple[TrainedModels, dict]:
@@ -105,12 +110,34 @@ def train(df_clean: pd.DataFrame, config: TrainConfig | None = None) -> tuple[Tr
         verbose=False,
     )
 
+    # Conformal layer: isotonic calibration + CRC flag thresholds, fitted on
+    # the SAME final-slice-of-training-time used for early stopping above.
+    # Honest caveat on the reuse: early stopping already peeked at this slice
+    # to pick the tree count, so the calibrated probabilities and thresholds
+    # inherit a mild optimism. We accept that in exchange for not burning a
+    # third time window (the same trade eta-regression makes in
+    # conformal_qhat); with more history, give calibration its own slice.
+    # CRC runs on the RAW score, not the calibrated one: isotonic is piecewise
+    # constant, and thresholding inside one of its plateaus forces the whole
+    # plateau into the flag set (measured cost at alpha=0.20: ~77% flagged vs
+    # ~62% on raw scores, same guarantee). Division of labor: isotonic fixes
+    # probability levels, CRC certifies the flag set on the fine-grained
+    # ranking. The guarantee holds for any fixed score function.
+    y_cal = es_valid[schema.LABEL_COL].to_numpy()
+    calibrator = conformal.calibrate_probabilities(xgb, X_es_valid, y_cal)
+    s_cal = xgb.predict_proba(X_es_valid)[:, 1]
+    crc_thresholds = {
+        alpha: conformal.crc_threshold(s_cal, y_cal, alpha) for alpha in conformal.DEFAULT_ALPHAS
+    }
+
     models = TrainedModels(
         baseline=baseline,
         xgb=xgb,
         feature_columns=list(X_train.columns),
         cutoff_date=str(cutoff.date()),
         config=config,
+        calibrator=calibrator,
+        crc_thresholds=crc_thresholds,
     )
     splits = {
         "train": train_df,
