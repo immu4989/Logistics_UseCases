@@ -3,8 +3,10 @@
 The load-bearing assertions are the constraint checks (every policy serves
 every stop exactly once, never overloads a truck, never runs past the shift)
 and the policy ordering: on the same cleaned day, savings_2opt must beat both
-the fixed-zone status quo and global nearest-neighbor by a real margin, on
-the default seed and an alternate. NN vs zones is deliberately NOT ordered —
+the fixed-zone status quo and global nearest-neighbor by a real margin, and
+savings_ls (the star: + or-opt/2-opt*/swap local search + seeded ILS) must
+never lose to savings_2opt, on the default seed and an alternate. NN vs
+zones is deliberately NOT ordered —
 the balanced-zone baseline and greedy NN trade places seed to seed (verified
 across seeds 3/7/11/42/99), and that closeness is part of the story.
 """
@@ -125,6 +127,51 @@ def test_savings_2opt_beats_both_baselines_by_margin(seed):
     assert miles["savings_2opt"] < 0.95 * miles["nearest_neighbor_global"]
 
 
+@pytest.mark.parametrize("seed", [SEED, ALT_SEED])
+def test_savings_ls_never_worse_than_savings_2opt(seed):
+    # The local-search stack + ILS starts FROM the savings_2opt plan and only
+    # ever accepts strict improvements, so it can never lose to it.
+    _, dist, solutions = _solve_day(seed)
+    miles = {
+        name: sum(solve.route_miles(r, dist) for r in sol.routes)
+        for name, sol in solutions.items()
+    }
+    assert miles["savings_ls"] <= miles["savings_2opt"] + 1e-6
+    # and it inherits (at least) the old policy's win over both baselines
+    assert miles["savings_ls"] < 0.95 * miles["zone_fixed"]
+    assert miles["savings_ls"] < 0.95 * miles["nearest_neighbor_global"]
+
+
+def test_local_search_preserves_feasibility_and_miles(day):
+    # Every operator in the stack (or-opt, 2-opt*, swap, intra 2-opt) must
+    # keep the plan legal: each stop exactly once, capacity and shift
+    # respected on every route — and total miles must never increase.
+    stops, dist, _ = day
+    packages = stops["packages"].to_numpy(dtype=float)
+    service = stops["service_min"].to_numpy(dtype=float)
+    before = solve.clarke_wright(stops, dist)
+    before_miles = sum(solve.route_miles(r, dist) for r in before)
+    after = solve.local_search(before, dist, packages, service)
+    visited = sorted(i for r in after for i in r)
+    assert visited == list(range(len(stops)))
+    for route in after:
+        assert packages[route].sum() <= solve.CAPACITY_PKGS
+        assert solve.route_minutes(route, dist, service) <= solve.MAX_ROUTE_MIN + 1e-6
+    assert sum(solve.route_miles(r, dist) for r in after) <= before_miles + 1e-9
+
+
+def test_savings_ls_stage_miles_recorded_and_monotone(day):
+    # Each stage may only improve on the last: construction >= 2-opt >=
+    # local-search stack >= ILS best == the returned plan.
+    _, dist, solutions = day
+    star = solutions["savings_ls"]
+    s = star.stage_miles
+    assert s is not None
+    assert s["construction"] >= s["two_opt"] >= s["local_search"] >= s["ils"]
+    final = sum(solve.route_miles(r, dist) for r in star.routes)
+    assert final == pytest.approx(s["ils"], abs=0.01)
+
+
 def test_two_opt_never_increases_route_length(day):
     stops, dist, _ = day
     for route in solve.clarke_wright(stops, dist):
@@ -136,7 +183,7 @@ def test_two_opt_never_increases_route_length(day):
 
 def test_lower_bound_is_below_best_heuristic(day):
     stops, dist, solutions = day
-    best = sum(solve.route_miles(r, dist) for r in solutions["savings_2opt"].routes)
+    best = sum(solve.route_miles(r, dist) for r in solutions["savings_ls"].routes)
     lb = solve.lower_bound_miles(stops, dist)
     assert 0 < lb <= best
 
@@ -163,8 +210,14 @@ def test_evaluate_writes_artifacts_and_sane_economics(day, tmp_path):
     t = table.set_index("policy")
     assert t.loc["zone_fixed", "daily_savings_vs_zone_usd"] == 0.0
     assert t.loc["savings_2opt", "daily_savings_vs_zone_usd"] > 0
-    assert t.loc["savings_2opt", "annual_savings_vs_zone_usd"] == pytest.approx(
-        t.loc["savings_2opt", "daily_savings_vs_zone_usd"] * evaluate.OPERATING_DAYS_PER_YEAR
+    # the star must be at least as good as the policy it extends
+    assert (
+        t.loc["savings_ls", "daily_savings_vs_zone_usd"]
+        >= t.loc["savings_2opt", "daily_savings_vs_zone_usd"]
+    )
+    assert t.loc["savings_ls", "annual_savings_vs_zone_usd"] == pytest.approx(
+        t.loc["savings_ls", "daily_savings_vs_zone_usd"] * evaluate.OPERATING_DAYS_PER_YEAR,
+        abs=0.5,  # the annual figure is rounded to whole dollars
     )
     assert (t["max_route_hours"] <= solve.MAX_ROUTE_MIN / 60.0 + 1e-6).all()
 
@@ -178,6 +231,7 @@ def test_rationale_written_and_checkable(day, tmp_path):
     attribution = explain.write_rationale(stops, solutions, dist, tmp_path)
     text = (tmp_path / "rationale.md").read_text()
     assert "Cum mi" in text and "DEPOT" in text
+    assert "ILS" in text  # the attribution now covers the full solver stack
     # The attribution must reconcile: stage savings sum to zone minus final.
     zone = attribution["total_miles"].iloc[0]
     final = attribution["total_miles"].iloc[-1]
@@ -186,7 +240,7 @@ def test_rationale_written_and_checkable(day, tmp_path):
 
 def test_dispatch_sheet_arithmetic(day):
     stops, dist, solutions = day
-    route = solutions["savings_2opt"].routes[0]
+    route = solutions["savings_ls"].routes[0]
     sheet = explain.dispatch_sheet(route, stops, dist)
     assert len(sheet) == len(route) + 1  # + the ride home
     assert sheet["cum_load"].iloc[-1] == stops["packages"].to_numpy()[route].sum()

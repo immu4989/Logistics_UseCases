@@ -1,9 +1,11 @@
 """Benchmark the optimizer against CVRPLIB best-known solutions.
 
-For each registry instance: run Clarke-Wright + 2-opt (the exact code the
-synthetic pipeline runs), report our distance, the BKS, the gap, and the
-runtime; run plain nearest-neighbor for context. Writes ``bench_results.csv``
-and a README-ready ``bench_table.md``.
+For each registry instance: run BOTH solvers the synthetic pipeline runs —
+Clarke-Wright + 2-opt (``savings_2opt``) and the full local-search stack
+(``savings_ls``: + or-opt, 2-opt*, swap, seeded ILS) — and report each
+distance, the BKS, both gaps, and both runtimes; run plain nearest-neighbor
+for context. Writes ``bench_results.csv`` and a README-ready
+``bench_table.md``.
 
 Needs network on the first run (instances download into the cache dir);
 afterwards everything is offline and deterministic.
@@ -31,9 +33,15 @@ def run_bench(
         bks = cvrplib.REGISTRY[name]["bks"]
 
         start = time.perf_counter()
-        routes, ours = cvrplib.solve_instance(instance)
-        runtime_s = time.perf_counter() - start
-        _check_valid(instance, routes)
+        routes_2opt, cost_2opt = cvrplib.solve_instance(instance)
+        runtime_2opt = time.perf_counter() - start
+        _check_valid(instance, routes_2opt)
+
+        start = time.perf_counter()
+        routes_ls, cost_ls = cvrplib.solve_instance_ls(instance)
+        runtime_ls = time.perf_counter() - start
+        _check_valid(instance, routes_ls)
+
         _, nn_cost = cvrplib.solve_instance_nn(instance)
 
         rows.append(
@@ -41,13 +49,17 @@ def run_bench(
                 "instance": name,
                 "customers": instance.n_customers,
                 "capacity": instance.capacity,
-                "ours": int(ours),
+                "ours": int(cost_2opt),
+                "gap_pct": round(100.0 * (cost_2opt - bks) / bks, 2),
+                "ls": int(cost_ls),
+                "ls_gap_pct": round(100.0 * (cost_ls - bks) / bks, 2),
                 "bks": bks,
-                "gap_pct": round(100.0 * (ours - bks) / bks, 2),
                 "nn": int(nn_cost),
                 "nn_gap_pct": round(100.0 * (nn_cost - bks) / bks, 2),
-                "routes": len(routes),
-                "runtime_s": round(runtime_s, 3),
+                "routes": len(routes_2opt),
+                "ls_routes": len(routes_ls),
+                "runtime_s": round(runtime_2opt, 3),
+                "ls_runtime_s": round(runtime_ls, 3),
             }
         )
     return pd.DataFrame(rows)
@@ -67,16 +79,19 @@ def _check_valid(instance: cvrplib.Instance, routes: list[list[int]]) -> None:
 def to_markdown_table(results: pd.DataFrame) -> str:
     """README-ready table plus the mean-gap summary line."""
     lines = [
-        "| Instance | Customers | Ours (CW+2-opt) | BKS | Gap | NN (context) | Runtime |",
-        "|---|---:|---:|---:|---:|---:|---:|",
+        "| Instance | Customers | CW+2-opt | Gap | savings_ls | Gap | BKS "
+        "| NN (context) | Runtime |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for _, r in results.iterrows():
         lines.append(
-            f"| {r['instance']} | {r['customers']} | {r['ours']:,} | {r['bks']:,} "
-            f"| {r['gap_pct']:.1f}% | +{r['nn_gap_pct']:.0f}% | {r['runtime_s']:.2f}s |"
+            f"| {r['instance']} | {r['customers']} | {r['ours']:,} | {r['gap_pct']:.1f}% "
+            f"| {r['ls']:,} | **{r['ls_gap_pct']:.1f}%** | {r['bks']:,} "
+            f"| +{r['nn_gap_pct']:.0f}% | {r['ls_runtime_s']:.1f}s |"
         )
     lines.append(
-        f"| **mean** | | | | **{results['gap_pct'].mean():.1f}%** "
+        f"| **mean** | | | **{results['gap_pct'].mean():.1f}%** "
+        f"| | **{results['ls_gap_pct'].mean():.1f}%** | "
         f"| +{results['nn_gap_pct'].mean():.0f}% | |"
     )
     return "\n".join(lines)

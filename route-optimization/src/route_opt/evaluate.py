@@ -44,6 +44,7 @@ POLICY_COLORS = {
     "zone_fixed": "#8d99ae",
     "nearest_neighbor_global": "#e8a33d",
     "savings_2opt": "#2b6cb0",
+    "savings_ls": "#2f855a",
 }
 # Truck colors on the maps: fixed assignment (color follows the truck, never
 # its rank), tab10 while it lasts, tab20's second half beyond that.
@@ -103,6 +104,8 @@ def evaluate_all(
         "operating_days_per_year": OPERATING_DAYS_PER_YEAR,
         "lower_bound_miles": round(lb, 1),
         "construction_miles_savings_2opt": solutions["savings_2opt"].construction_miles,
+        # savings_ls stage miles: construction -> 2-opt -> local-search stack -> ILS
+        "stage_miles_savings_ls": solutions["savings_ls"].stage_miles,
         "policies": table.to_dict(orient="records"),
     }
     (out_dir / "metrics.json").write_text(json.dumps(metrics, indent=2))
@@ -158,7 +161,7 @@ def _plot_route_maps(stops, solutions, dist, path: Path) -> None:
     """The money chart: status quo vs optimizer, same metro, side by side."""
     fig, axes = plt.subplots(1, 2, figsize=(12.5, 6.3), sharex=True, sharey=True)
     _draw_solution(axes[0], stops, solutions[BASELINE], dist)
-    _draw_solution(axes[1], stops, solutions["savings_2opt"], dist)
+    _draw_solution(axes[1], stops, solutions["savings_ls"], dist)
     axes[0].set_ylabel("miles north of depot")
     axes[0].legend(loc="lower left", fontsize=9, framealpha=0.9)
     fig.suptitle("Same stops, same trucks, same constraints — only the routing differs",

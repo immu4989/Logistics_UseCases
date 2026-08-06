@@ -5,9 +5,9 @@ must survive is a different audit: a dispatcher looking at truck 3's manifest
 and asking "can my driver actually run this sheet?" So the explanation is the
 dispatch sheet itself — stop order with running load and clock time, checked
 against capacity and shift length line by line — plus an attribution that
-splits the saved miles between the two algorithm stages (Clarke-Wright
-construction vs 2-opt polish), so nobody has to take "the optimizer did it"
-on faith.
+splits the saved miles between the algorithm stages (Clarke-Wright
+construction, per-route 2-opt, the or-opt/2-opt*/swap local-search stack,
+and the ILS on top), so nobody has to take "the optimizer did it" on faith.
 """
 
 from __future__ import annotations
@@ -77,18 +77,33 @@ def write_rationale(
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    star = solutions["savings_2opt"]
-    zone_miles = sum(solve.route_miles(r, dist) for r in solutions["zone_fixed"].routes)
-    final_miles = sum(solve.route_miles(r, dist) for r in star.routes)
-    cw_miles = star.construction_miles
+    star = solutions["savings_ls"]
+    zone_miles = round(
+        sum(solve.route_miles(r, dist) for r in solutions["zone_fixed"].routes), 1
+    )
+    # Stage miles recorded by savings_ls itself: construction, per-route
+    # 2-opt, the or-opt/2-opt*/swap local optimum, and the ILS best. Rounding
+    # every stage BEFORE differencing makes the saved-miles column telescope
+    # exactly to (zone - final), so the table always reconciles.
+    stages = star.stage_miles
+    cw_miles = round(stages["construction"], 1)
+    two_opt_miles = round(stages["two_opt"], 1)
+    ls_miles = round(stages["local_search"], 1)
+    final_miles = round(stages["ils"], 1)
     attribution = pd.DataFrame(
         [
-            {"stage": "zone_fixed (status quo)", "total_miles": round(zone_miles, 1),
+            {"stage": "zone_fixed (status quo)", "total_miles": zone_miles,
              "miles_saved": 0.0},
-            {"stage": "after Clarke-Wright construction", "total_miles": round(cw_miles, 1),
+            {"stage": "after Clarke-Wright construction", "total_miles": cw_miles,
              "miles_saved": round(zone_miles - cw_miles, 1)},
-            {"stage": "after per-route 2-opt", "total_miles": round(final_miles, 1),
-             "miles_saved": round(cw_miles - final_miles, 1)},
+            {"stage": "after per-route 2-opt", "total_miles": two_opt_miles,
+             "miles_saved": round(cw_miles - two_opt_miles, 1)},
+            {"stage": "after or-opt + 2-opt* + swap local search",
+             "total_miles": ls_miles,
+             "miles_saved": round(two_opt_miles - ls_miles, 1)},
+            {"stage": f"after {solve.ILS_ROUNDS}-round ILS (final plan)",
+             "total_miles": final_miles,
+             "miles_saved": round(ls_miles - final_miles, 1)},
         ]
     )
 
@@ -124,7 +139,10 @@ def write_rationale(
     lines += [
         "",
         "Construction does the heavy lifting (it decides WHICH stops share a "
-        "truck); 2-opt then uncrosses each route's path. Both stages respect "
+        "truck); 2-opt uncrosses each route's path; the or-opt/2-opt*/swap "
+        "stack then fixes assignment mistakes construction locked in, and the "
+        "seeded ILS shakes the plan loose from its local optimum a fixed "
+        "number of times, keeping the best plan found. Every stage respects "
         "capacity and shift limits at every step, so the final plan needs no "
         "repair pass.",
     ]

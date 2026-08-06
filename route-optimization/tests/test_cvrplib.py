@@ -1,8 +1,9 @@
 """CVRPLIB benchmark plumbing, tested offline on one committed instance.
 
-tests/fixtures/A-n32-k5.{vrp,sol} come from CVRPLIB (see the attribution headers
-in the files). Everything here runs without network; the full multi-instance
-benchmark is exercised only when the download cache already exists.
+tests/fixtures/{A-n32-k5,A-n65-k9}.{vrp,sol} come from CVRPLIB (see the
+attribution headers in the files). Everything here runs without network; the
+full multi-instance benchmark is exercised only when the download cache
+already exists.
 """
 
 from pathlib import Path
@@ -88,6 +89,40 @@ def test_solver_is_deterministic_on_instance(a32):
 
 
 # --------------------------------------------------------------------------
+# savings_ls (local-search stack + ILS) on the committed instance
+# --------------------------------------------------------------------------
+def test_savings_ls_valid_and_within_4pct_of_bks(a32):
+    routes, cost = cvrplib.solve_instance_ls(a32)
+    visited = sorted(stop for route in routes for stop in route)
+    assert visited == list(range(a32.n_customers))
+    demands = a32.demands[1:]
+    assert all(demands[route].sum() <= a32.capacity for route in routes)
+    assert cost >= BKS_A32  # nobody beats a proven optimum
+    assert (cost - BKS_A32) / BKS_A32 <= 0.04
+    # and it can never lose to the plan it starts from
+    _, cost_2opt = cvrplib.solve_instance(a32)
+    assert cost <= cost_2opt
+
+
+def test_savings_ls_is_byte_deterministic(a32):
+    # Seeded RNG + fixed scan orders + fixed budgets: two runs must produce
+    # the identical plan, route for route, stop for stop.
+    routes_a, cost_a = cvrplib.solve_instance_ls(a32)
+    routes_b, cost_b = cvrplib.solve_instance_ls(a32)
+    assert routes_a == routes_b
+    assert cost_a == cost_b
+
+
+def test_mean_gap_on_committed_fixtures():
+    # Network-free gap floor: the two committed instances (easiest and the
+    # old worst case) must average under the README's claimed 3% mean.
+    results = bench.run_bench(["A-n32-k5", "A-n65-k9"], cache_dir=DATA)
+    assert (results["ls_gap_pct"] >= 0).all()
+    assert (results["ls_gap_pct"] <= results["gap_pct"]).all()
+    assert results["ls_gap_pct"].mean() <= 3.0
+
+
+# --------------------------------------------------------------------------
 # Full bench — only when the network cache is already populated
 # --------------------------------------------------------------------------
 @pytest.mark.skipif(
@@ -103,3 +138,9 @@ def test_full_bench_on_cached_instances():
     assert set(results["instance"]) == set(cvrplib.REGISTRY)
     assert (results["gap_pct"] >= 0).all()  # BKS are proven optima for these sets
     assert (results["gap_pct"] <= 15).all()
+    # the README's savings_ls claims, asserted: mean <= 3%, worst <= 5%,
+    # never worse than the savings_2opt plan it starts from
+    assert (results["ls_gap_pct"] >= 0).all()
+    assert (results["ls_gap_pct"] <= results["gap_pct"]).all()
+    assert results["ls_gap_pct"].mean() <= 3.0
+    assert results["ls_gap_pct"].max() <= 5.0

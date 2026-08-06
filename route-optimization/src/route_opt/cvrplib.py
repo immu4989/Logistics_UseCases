@@ -225,6 +225,21 @@ def solve_instance(instance: Instance) -> tuple[list[list[int]], float]:
     return result.routes, solution_cost(result.routes, dist)
 
 
+def solve_instance_ls(instance: Instance) -> tuple[list[list[int]], float]:
+    """Run the repo's full local-search solver (savings_ls) on an instance.
+
+    Same code path as the synthetic pipeline's star policy: Clarke-Wright +
+    2-opt start, then the or-opt / 2-opt* / swap stack and the seeded ILS.
+    Deterministic: same instance, same routes, byte for byte, every run.
+    """
+    dist = euc_2d_matrix(instance)
+    stops = _as_stops_frame(instance)
+    result = solve.savings_ls(
+        stops, dist, capacity=instance.capacity, max_route_min=float("inf")
+    )
+    return result.routes, solution_cost(result.routes, dist)
+
+
 def solve_instance_nn(instance: Instance) -> tuple[list[list[int]], float]:
     """Plain nearest-neighbor on a CVRPLIB instance, for context in the bench."""
     dist = euc_2d_matrix(instance)

@@ -47,7 +47,7 @@ def cmd_all(args) -> None:
         f"minimum fleet {solve.trucks_needed(stops)} trucks"
     )
 
-    print("[3/4] routing the day three ways (same stops, same fleet constraints) ...")
+    print("[3/4] routing the day four ways (same stops, same fleet constraints) ...")
     dist = solve.distance_matrix(stops)
     solutions = {name: fn(stops, dist) for name, fn in solve.POLICIES.items()}
     table = evaluate.evaluate_all(stops, solutions, dist, out_dir=report_dir)
@@ -68,11 +68,11 @@ def cmd_all(args) -> None:
     print("[4/4] writing dispatch-sheet rationale ...")
     attribution = explain.write_rationale(stops, solutions, dist, report_dir)
     for _, r in attribution.iterrows():
-        print(f"      {r['stage']:<36} {r['total_miles']:>8,.1f} mi  (saved {r['miles_saved']:,.1f})")
+        print(f"      {r['stage']:<42} {r['total_miles']:>8,.1f} mi  (saved {r['miles_saved']:,.1f})")
 
-    star = table.set_index("policy").loc["savings_2opt"]
+    star = table.set_index("policy").loc["savings_ls"]
     print(
-        f"\nsavings_2opt vs today's fixed zones: {star['miles_saved_vs_zone_pct']:.1f}% fewer miles, "
+        f"\nsavings_ls vs today's fixed zones: {star['miles_saved_vs_zone_pct']:.1f}% fewer miles, "
         f"${star['daily_savings_vs_zone_usd']:,.0f}/day, "
         f"${star['annual_savings_vs_zone_usd']:,.0f}/year at {evaluate.OPERATING_DAYS_PER_YEAR} "
         f"operating days.\ndone. reports -> {report_dir}"
@@ -83,21 +83,22 @@ def cmd_bench(args) -> None:
     names = [n.strip() for n in args.instances.split(",") if n.strip()] if args.instances else None
     report_dir = Path(args.artifacts) / "reports"
     print(
-        f"benchmarking Clarke-Wright + 2-opt against CVRPLIB best-known solutions "
+        f"benchmarking savings_2opt and savings_ls against CVRPLIB best-known solutions "
         f"({len(names or cvrplib.REGISTRY)} instances, cache: {args.cache_dir}) ..."
     )
     results = bench.run_bench(names, cache_dir=Path(args.cache_dir))
     print(
-        f"{'instance':<12} {'cust':>5} {'ours':>7} {'bks':>7} {'gap':>7} "
-        f"{'nn gap':>8} {'routes':>7} {'time':>7}"
+        f"{'instance':<12} {'cust':>5} {'2opt':>7} {'gap':>6} {'ls':>7} {'ls gap':>7} "
+        f"{'bks':>7} {'nn gap':>7} {'time':>6}"
     )
     for _, r in results.iterrows():
         print(
-            f"{r['instance']:<12} {r['customers']:>5} {r['ours']:>7,} {r['bks']:>7,} "
-            f"{r['gap_pct']:>6.1f}% {r['nn_gap_pct']:>7.1f}% {r['routes']:>7} "
-            f"{r['runtime_s']:>6.2f}s"
+            f"{r['instance']:<12} {r['customers']:>5} {r['ours']:>7,} {r['gap_pct']:>5.1f}% "
+            f"{r['ls']:>7,} {r['ls_gap_pct']:>6.1f}% {r['bks']:>7,} "
+            f"{r['nn_gap_pct']:>6.1f}% {r['ls_runtime_s']:>5.1f}s"
         )
-    print(f"mean gap to BKS: {results['gap_pct'].mean():.1f}% "
+    print(f"mean gap to BKS: savings_2opt {results['gap_pct'].mean():.1f}%, "
+          f"savings_ls {results['ls_gap_pct'].mean():.1f}% "
           f"(nearest-neighbor context: +{results['nn_gap_pct'].mean():.0f}%)")
     bench.write_reports(results, report_dir)
     print(f"wrote {report_dir}/bench_results.csv and {report_dir}/bench_table.md")

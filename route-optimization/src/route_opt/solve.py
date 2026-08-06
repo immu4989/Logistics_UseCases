@@ -19,10 +19,16 @@ The ladder, from how depots route today to how a solver would:
   because every team tries it first, and because its failure mode (early
   trucks cherry-pick, the last truck inherits scattered leftovers) is worth
   seeing in miles.
-- ``savings_2opt``            — the point of this use case. Clarke-Wright
+- ``savings_2opt``            — the classic pairing. Clarke-Wright
   savings construction, then 2-opt improvement within each route. Both
   pieces are decades old, fit in a page of numpy, and land within a few
   percent of commercial solvers at this scale.
+- ``savings_ls``              — the star. The same Clarke-Wright + 2-opt
+  start, then a proper local-search stack (inter-route 2-opt*, or-opt
+  segment relocation, inter-route swap) driven to a local optimum, then a
+  seeded iterated local search (ILS) that perturbs and re-optimizes for a
+  fixed round budget. This is the same family of moves that state-of-the-art
+  heuristics (LKH, HGS) are built from, implemented small and readable.
 
 No OR-Tools, no MIP solver, on purpose: the algorithms here are transparent
 enough to audit line by line, deterministic, and dependency-free. Distances
@@ -47,6 +53,19 @@ SPEED_MPH = 25.0           # blended urban average, stop-to-stop
 
 TWO_OPT_MAX_PASSES = 60    # cap improvement sweeps per route: determinism + bounded runtime
 
+# Local-search stack (savings_ls). All budgets are fixed COUNTS, never wall
+# clock: identical inputs must produce byte-identical plans on any machine.
+LS_NEIGHBORS = 20          # granular neighborhood: moves only link stops that are
+                           # among each other's 20 nearest (Toth & Vigo's trick;
+                           # prunes the O(n^2) move space to O(n·K) with almost
+                           # no quality loss, because long new edges never help)
+OR_OPT_MAX_SEG = 3         # or-opt relocates segments of 1..3 consecutive stops
+ILS_ROUNDS = 40            # fixed perturbation budget for the iterated local search
+ILS_KICKS = 3              # random segment relocations per perturbation round
+ILS_SEED = 0               # the seed is part of the policy definition: same
+                           # seed, same plan, byte for byte
+_EPS = 1e-9                # a move must beat this to count as an improvement
+
 
 @dataclass
 class Solution:
@@ -57,6 +76,10 @@ class Solution:
     # savings_2opt also records total miles after Clarke-Wright construction
     # but before 2-opt, so the savings can be attributed between the two.
     construction_miles: float | None = field(default=None)
+    # savings_ls records miles after every stage — construction, intra-route
+    # 2-opt, the or-opt/2-opt*/swap local optimum, and the ILS best — so the
+    # rationale can attribute the saved miles stage by stage.
+    stage_miles: dict[str, float] | None = field(default=None)
 
 
 # ---------------------------------------------------------------------------
@@ -337,6 +360,391 @@ def savings_2opt(
 
 
 # ---------------------------------------------------------------------------
+# Policy (d): savings_ls — the same start, then a real local-search stack.
+#
+# This is how serious heuristic solvers (the LKH / HGS lineage) earn their
+# gaps: not one clever move, but a STACK of cheap moves driven to a mutual
+# local optimum, then perturb-and-reoptimize to escape it. Everything below
+# is deterministic: fixed scan orders, fixed budgets, a seeded RNG.
+# ---------------------------------------------------------------------------
+def _neighbor_lists(dist: np.ndarray, k: int = LS_NEIGHBORS) -> np.ndarray:
+    """For each stop, its k nearest OTHER stops, nearest first.
+
+    Local-search moves below only ever try to create an edge between a stop
+    and one of its k nearest neighbors. That is the granular-neighborhood
+    idea: an improving move must add at least one short edge, so candidates
+    whose new edges are all long are never worth scanning. Stable argsort
+    keeps tie order (and therefore the whole search) deterministic.
+    """
+    n = dist.shape[0] - 1
+    order = np.argsort(dist[1:, 1:], axis=1, kind="stable")
+    rows = []
+    for i in range(n):
+        row = order[i]
+        rows.append(row[row != i][: min(k, n - 1)])  # drop self even on 0-distance ties
+    return np.asarray(rows)
+
+
+class _Plan:
+    """Mutable working state for the local-search stack.
+
+    Keeps, per route: the stop list, total load, total service minutes and
+    total miles, plus two per-stop lookup arrays (which route, which
+    position). Move evaluation is O(1) arithmetic on four to six distance
+    matrix entries; only an ACCEPTED move pays to rebuild its two routes'
+    bookkeeping, and accepted moves are rare relative to scans.
+    """
+
+    def __init__(self, routes, dist, packages, service_min, capacity, max_route_min):
+        self.dist = dist
+        self.packages = packages
+        self.service_min = service_min
+        self.capacity = capacity
+        self.max_route_min = max_route_min
+        self.n = len(packages)
+        self.routes: list[list[int]] = [list(r) for r in routes if r]
+        self.route_of = np.zeros(self.n, dtype=np.int64)
+        self.pos = np.zeros(self.n, dtype=np.int64)
+        self.load = [0.0] * len(self.routes)
+        self.svc = [0.0] * len(self.routes)
+        self.miles = [0.0] * len(self.routes)
+        for rid in range(len(self.routes)):
+            self._rebuild(rid)
+
+    def _rebuild(self, rid: int) -> None:
+        """Recompute one route's bookkeeping after a move touched it."""
+        r = self.routes[rid]
+        for p, stop in enumerate(r):
+            self.route_of[stop] = rid
+            self.pos[stop] = p
+        self.load[rid] = float(self.packages[r].sum()) if r else 0.0
+        self.svc[rid] = float(self.service_min[r].sum()) if r else 0.0
+        self.miles[rid] = route_miles(r, self.dist)
+
+    def total_miles(self) -> float:
+        return float(sum(self.miles))
+
+    def _time_ok(self, new_miles: float, new_svc: float) -> bool:
+        """Shift check from tracked totals — no list walk needed."""
+        if self.max_route_min == float("inf"):
+            return True  # CVRPLIB rules: capacity only, no shift clock
+        return new_miles / SPEED_MPH * 60.0 + new_svc <= self.max_route_min + 1e-9
+
+    # -- the sweep ----------------------------------------------------------
+    def improve(self, neighbors: np.ndarray, active: np.ndarray | None = None) -> None:
+        """First-improvement sweeps to a local optimum of the full move stack.
+
+        ``active`` is the classic don't-look-bit array: a stop that offered
+        no improving move is switched off and only switched back on when a
+        move touches its route (or lands near it). Scan order is stop index
+        0..n-1 — fixed, so the local optimum is deterministic. The ILS below
+        passes a mostly-off ``active`` so each round only re-optimizes the
+        region the perturbation disturbed.
+        """
+        if active is None:
+            active = np.ones(self.n, dtype=bool)
+        while True:
+            improved_any = False
+            for i in range(self.n):
+                if not active[i]:
+                    continue
+                if self._improve_stop(i, neighbors, active):
+                    improved_any = True
+                else:
+                    active[i] = False  # don't look again until something moves nearby
+            if not improved_any:
+                return
+
+    def _activate(self, active, rid_a, rid_b, neighbors, i, j) -> None:
+        """Wake the stops whose best move may have changed: both touched
+        routes, plus the moved stops' own neighborhoods (their neighbors may
+        sit in routes that were NOT touched)."""
+        active[self.routes[rid_a]] = True
+        active[self.routes[rid_b]] = True
+        active[neighbors[i]] = True
+        active[neighbors[j]] = True
+
+    def _improve_stop(self, i: int, neighbors: np.ndarray, active: np.ndarray) -> bool:
+        """Try every move that would create a short edge at stop ``i``.
+
+        Fixed operator order per neighbor j — intra 2-opt, or-opt relocation
+        (after j, then before j, segment length 1..3), then 2-opt* and swap
+        when i and j ride different trucks. The first improving feasible
+        move is applied immediately (first-improvement keeps sweeps cheap
+        and, with the fixed scan order, deterministic).
+        """
+        d, P, S = self.dist, self.packages, self.service_min
+        for j in neighbors[i]:
+            a_id = int(self.route_of[i])
+            b_id = int(self.route_of[j])
+            ra, rb = self.routes[a_id], self.routes[b_id]
+            pi, pj = int(self.pos[i]), int(self.pos[j])
+            ni, nj = i + 1, j + 1  # distance-matrix nodes
+
+            # ---- intra-route 2-opt: reverse the span between i and j -----
+            # Removes edges (a, a+1) and (b, b+1), adds (a, b) and (a+1, b+1)
+            # with the segment a+1..b reversed. Miles can only drop and the
+            # load is untouched, so no feasibility check is needed.
+            if a_id == b_id:
+                lo, hi = (pi, pj) if pi < pj else (pj, pi)
+                if hi > lo + 1:
+                    s_lo, s_hi = ra[lo] + 1, ra[hi] + 1
+                    after_lo = ra[lo + 1] + 1
+                    after_hi = ra[hi + 1] + 1 if hi + 1 < len(ra) else 0
+                    delta = (
+                        d[s_lo, s_hi] + d[after_lo, after_hi]
+                        - d[s_lo, after_lo] - d[s_hi, after_hi]
+                    )
+                    if delta < -_EPS:
+                        ra[lo + 1 : hi + 1] = ra[lo + 1 : hi + 1][::-1]
+                        self._rebuild(a_id)
+                        self._activate(active, a_id, a_id, neighbors, i, j)
+                        return True
+
+            # ---- or-opt: relocate the 1..3-stop segment starting at i ----
+            # Removal gain is fixed per segment; each insertion point near j
+            # (right after j, right before j) is one O(1) delta on top.
+            for seg_len in range(1, OR_OPT_MAX_SEG + 1):
+                if pi + seg_len > len(ra):
+                    break
+                if a_id == b_id and pi <= pj < pi + seg_len:
+                    continue  # j is inside the segment being moved
+                s0 = ra[pi] + 1
+                s1 = ra[pi + seg_len - 1] + 1
+                prev_s = ra[pi - 1] + 1 if pi > 0 else 0
+                next_s = ra[pi + seg_len] + 1 if pi + seg_len < len(ra) else 0
+                gain = d[prev_s, next_s] - d[prev_s, s0] - d[s1, next_s]
+                seg_load = float(P[ra[pi : pi + seg_len]].sum())
+                seg_svc = float(S[ra[pi : pi + seg_len]].sum())
+
+                # Two insertion slots: (j, here, next_j) and (prev_j, here, j).
+                # Skip the slot that would just rebuild the removed edges.
+                nxt_j = rb[pj + 1] + 1 if pj + 1 < len(rb) else 0
+                prv_j = rb[pj - 1] + 1 if pj > 0 else 0
+                slots = []
+                if not (a_id == b_id and pj == pi - 1):  # after-j = no-op then
+                    slots.append((d[nj, s0] + d[s1, nxt_j] - d[nj, nxt_j], pj + 1))
+                if not (a_id == b_id and pj == pi + seg_len):  # before-j = no-op then
+                    slots.append((d[prv_j, s0] + d[s1, nj] - d[prv_j, nj], pj))
+
+                for cost, insert_at in slots:
+                    if gain + cost >= -_EPS:
+                        continue
+                    if a_id != b_id:  # capacity + shift only change across trucks
+                        if self.load[b_id] + seg_load > self.capacity:
+                            continue
+                        if not self._time_ok(self.miles[b_id] + cost, self.svc[b_id] + seg_svc):
+                            continue
+                        # rounded distances can break the triangle inequality,
+                        # so the shrunk donor route is checked too (cheap)
+                        if not self._time_ok(self.miles[a_id] + gain, self.svc[a_id] - seg_svc):
+                            continue
+                    seg = ra[pi : pi + seg_len]
+                    del ra[pi : pi + seg_len]
+                    at = insert_at - seg_len if (a_id == b_id and pj > pi) else insert_at
+                    rb[at:at] = seg
+                    self._rebuild(a_id)
+                    if b_id != a_id:
+                        self._rebuild(b_id)
+                    self._activate(active, a_id, b_id, neighbors, i, j)
+                    return True
+
+            if a_id == b_id:
+                continue
+
+            # ---- 2-opt*: swap route tails after i and after j -------------
+            # New route A = head of A up to i, then B's tail; new route B =
+            # head of B up to j, then A's tail. Exactly two edges change, so
+            # the miles delta is O(1); loads need the head/tail split sums,
+            # paid only when the delta already looks like a win.
+            after_i = ra[pi + 1] + 1 if pi + 1 < len(ra) else 0
+            after_j = rb[pj + 1] + 1 if pj + 1 < len(rb) else 0
+            delta = d[ni, after_j] + d[nj, after_i] - d[ni, after_i] - d[nj, after_j]
+            if delta < -_EPS:
+                head_a_load = float(P[ra[: pi + 1]].sum())
+                head_b_load = float(P[rb[: pj + 1]].sum())
+                tail_a_load = self.load[a_id] - head_a_load
+                tail_b_load = self.load[b_id] - head_b_load
+                if head_a_load + tail_b_load <= self.capacity and \
+                        head_b_load + tail_a_load <= self.capacity:
+                    new_a = ra[: pi + 1] + rb[pj + 1 :]
+                    new_b = rb[: pj + 1] + ra[pi + 1 :]
+                    ok = True
+                    if self.max_route_min != float("inf"):
+                        for r in (new_a, new_b):
+                            if not self._time_ok(route_miles(r, d), float(S[r].sum())):
+                                ok = False
+                                break
+                    if ok:
+                        self.routes[a_id] = new_a
+                        self.routes[b_id] = new_b
+                        self._rebuild(a_id)
+                        self._rebuild(b_id)
+                        self._activate(active, a_id, b_id, neighbors, i, j)
+                        return True
+
+            # ---- swap: exchange stops i and j between their routes --------
+            prev_i = ra[pi - 1] + 1 if pi > 0 else 0
+            next_i = ra[pi + 1] + 1 if pi + 1 < len(ra) else 0
+            prev_j = rb[pj - 1] + 1 if pj > 0 else 0
+            next_j = rb[pj + 1] + 1 if pj + 1 < len(rb) else 0
+            delta_a = d[prev_i, nj] + d[nj, next_i] - d[prev_i, ni] - d[ni, next_i]
+            delta_b = d[prev_j, ni] + d[ni, next_j] - d[prev_j, nj] - d[nj, next_j]
+            if delta_a + delta_b < -_EPS:
+                if self.load[a_id] - P[i] + P[j] <= self.capacity and \
+                        self.load[b_id] - P[j] + P[i] <= self.capacity and \
+                        self._time_ok(self.miles[a_id] + delta_a,
+                                      self.svc[a_id] - S[i] + S[j]) and \
+                        self._time_ok(self.miles[b_id] + delta_b,
+                                      self.svc[b_id] - S[j] + S[i]):
+                    ra[pi], rb[pj] = j, i
+                    self._rebuild(a_id)
+                    self._rebuild(b_id)
+                    self._activate(active, a_id, b_id, neighbors, i, j)
+                    return True
+        return False
+
+
+def local_search(
+    routes: list[list[int]],
+    dist: np.ndarray,
+    packages: np.ndarray,
+    service_min: np.ndarray,
+    capacity: float = CAPACITY_PKGS,
+    max_route_min: float = MAX_ROUTE_MIN,
+    neighbors: np.ndarray | None = None,
+) -> list[list[int]]:
+    """Drive a plan to a local optimum of the full move stack.
+
+    Operators: intra-route 2-opt, or-opt segment relocation (intra and
+    inter, segments of 1..{OR_OPT_MAX_SEG}), inter-route 2-opt* tail swaps,
+    and inter-route stop swaps — all capacity- and shift-checked, all
+    first-improvement in a fixed scan order, so the result is deterministic
+    and total miles never increase. Routes emptied by relocation are dropped.
+    """
+    plan = _Plan(routes, dist, packages, service_min, capacity, max_route_min)
+    if neighbors is None:
+        neighbors = _neighbor_lists(dist)
+    plan.improve(neighbors)
+    return [r for r in plan.routes if r]
+
+
+def _perturb(
+    routes: list[list[int]],
+    rng: np.random.Generator,
+    dist: np.ndarray,
+    packages: np.ndarray,
+    service_min: np.ndarray,
+    capacity: float,
+    max_route_min: float,
+) -> tuple[list[list[int]], set[int]]:
+    """One ILS kick: a few random (seeded) segment relocations.
+
+    Each kick tears a random 1..3-stop segment out of one route and splices
+    it into a random position in another (feasibility-checked; infeasible
+    draws are undone and retried a bounded number of times). The damage is
+    deliberately non-improving — its job is to knock the plan off its local
+    optimum so the next local-search pass can find a different one. Returns
+    the perturbed plan plus the set of stops worth re-scanning.
+    """
+    routes = [list(r) for r in routes]
+    touched: set[int] = set()
+    for _ in range(ILS_KICKS):
+        for _attempt in range(20):
+            nonempty = [k for k, r in enumerate(routes) if r]
+            src = nonempty[int(rng.integers(len(nonempty)))]
+            ra = routes[src]
+            seg_len = min(int(rng.integers(1, OR_OPT_MAX_SEG + 1)), len(ra))
+            p = int(rng.integers(0, len(ra) - seg_len + 1))
+            dst = nonempty[int(rng.integers(len(nonempty)))]
+            if dst == src and len(ra) == seg_len:
+                continue  # would just rebuild the same single-segment route
+            seg = ra[p : p + seg_len]
+            del ra[p : p + seg_len]
+            rb = routes[dst]
+            q = int(rng.integers(0, len(rb) + 1))
+            rb[q:q] = seg
+            if (
+                packages[rb].sum() <= capacity
+                and route_minutes(rb, dist, service_min) <= max_route_min
+            ):
+                touched.update(routes[src])
+                touched.update(rb)
+                break
+            del rb[q : q + seg_len]  # undo and redraw
+            ra[p:p] = seg
+    return routes, touched
+
+
+def savings_ls(
+    stops: pd.DataFrame,
+    dist: np.ndarray,
+    capacity: float = CAPACITY_PKGS,
+    max_route_min: float = MAX_ROUTE_MIN,
+    ils_rounds: int = ILS_ROUNDS,
+    seed: int = ILS_SEED,
+) -> Solution:
+    """Clarke-Wright + 2-opt + the local-search stack + iterated local search.
+
+    The pipeline, with miles recorded at each stage for the rationale:
+
+    1. Clarke-Wright construction (decides which stops share a truck),
+    2. per-route 2-opt (uncrosses each tour),
+    3. the move stack — or-opt, 2-opt*, swap, intra 2-opt — to a mutual
+       local optimum (fixes ASSIGNMENT mistakes construction locked in),
+    4. ILS: ``ils_rounds`` rounds of seeded perturbation + re-optimization,
+       keeping the best plan ever seen (escapes the local optimum itself).
+
+    Every budget is a fixed count and the RNG is seeded, so the same inputs
+    give byte-identical routes on every run and every machine.
+    """
+    packages = stops["packages"].to_numpy(dtype=float)
+    service_min = stops["service_min"].to_numpy(dtype=float)
+    neighbors = _neighbor_lists(dist)
+
+    constructed = clarke_wright(stops, dist, capacity=capacity, max_route_min=max_route_min)
+    construction_miles = sum(route_miles(r, dist) for r in constructed)
+    polished = [two_opt(r, dist) for r in constructed]
+    two_opt_miles = sum(route_miles(r, dist) for r in polished)
+
+    plan = _Plan(polished, dist, packages, service_min, capacity, max_route_min)
+    plan.improve(neighbors)
+    best = [list(r) for r in plan.routes if r]
+    ls_miles = best_miles = plan.total_miles()
+
+    # Iterated local search: perturb the BEST plan, re-optimize only the
+    # disturbed region (don't-look bits start off everywhere else), keep the
+    # result only if it beats the record. Rejected rounds restart from the
+    # record, so one bad kick never compounds.
+    rng = np.random.default_rng(seed)
+    for _ in range(ils_rounds):
+        kicked, touched = _perturb(
+            best, rng, dist, packages, service_min, capacity, max_route_min
+        )
+        plan = _Plan(kicked, dist, packages, service_min, capacity, max_route_min)
+        active = np.zeros(len(packages), dtype=bool)
+        if touched:
+            active[list(touched)] = True
+        plan.improve(neighbors, active=active)
+        cand_miles = plan.total_miles()
+        if cand_miles < best_miles - _EPS:
+            best = [list(r) for r in plan.routes if r]
+            best_miles = cand_miles
+
+    return Solution(
+        "savings_ls",
+        best,
+        construction_miles=round(construction_miles, 2),
+        stage_miles={
+            "construction": round(construction_miles, 2),
+            "two_opt": round(two_opt_miles, 2),
+            "local_search": round(ls_miles, 2),
+            "ils": round(best_miles, 2),
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
 # Lower bound — context, not an optimum.
 # ---------------------------------------------------------------------------
 def lower_bound_miles(stops: pd.DataFrame, dist: np.ndarray) -> float:
@@ -370,4 +778,5 @@ POLICIES = {
     "zone_fixed": zone_fixed,
     "nearest_neighbor_global": nearest_neighbor_global,
     "savings_2opt": savings_2opt,
+    "savings_ls": savings_ls,
 }
