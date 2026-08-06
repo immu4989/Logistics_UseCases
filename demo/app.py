@@ -133,4 +133,7 @@ def build() -> gr.Blocks:
 
 if __name__ == "__main__":
     logic.warmup()
-    build().launch()
+    # mcp_server exposes the three callbacks as MCP tools (schemas generated
+    # from logic.py's signatures/docstrings), so agents can call the models at
+    # <space-url>/gradio_api/mcp/ in addition to humans using the UI.
+    build().launch(mcp_server=True)

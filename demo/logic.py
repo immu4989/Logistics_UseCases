@@ -223,9 +223,35 @@ def _raw_row(
 # ---------------------------------------------------------------------------
 # Tab 1a: commit-miss risk + SHAP
 # ---------------------------------------------------------------------------
-def score_commit(*inputs):
+# NB: these callbacks use named, typed parameters (not *args) on purpose — the
+# demo also runs as an MCP server, and the generated tool schemas come from the
+# signatures and docstrings below.
+def score_commit(
+    distance_miles: float,
+    service_level: str,
+    origin_hub_congestion: float,
+    dest_hub_congestion: float,
+    dest_weather_severity: int,
+    minutes_after_cutoff: float,
+    is_peak_season: bool,
+    is_rural_dest: bool,
+    dest_type: str,
+):
+    """Score one parcel's probability of missing its delivery commitment.
+
+    Uses only induction-time information. Args: distance_miles (5-3000),
+    service_level (overnight|two_day|ground), origin/dest hub congestion (0-1),
+    dest_weather_severity (0 clear .. 3 severe), minutes_after_cutoff (pickup
+    relative to facility cutoff; positive = late), is_peak_season,
+    is_rural_dest, dest_type (residential|commercial). Returns a markdown
+    verdict with the miss probability and a SHAP chart of the drivers.
+    """
     models = _commit_models()
-    raw = _raw_row(*inputs)
+    raw = _raw_row(
+        distance_miles, service_level, origin_hub_congestion, dest_hub_congestion,
+        dest_weather_severity, minutes_after_cutoff, is_peak_season, is_rural_dest,
+        dest_type,
+    )
     clean, _ = dc_cleaning.clean(raw)
     X = dc_features.to_matrix(dc_features.engineer(clean))
     X = X.reindex(columns=models.feature_columns, fill_value=0.0)
@@ -277,9 +303,30 @@ def _pretty(col: str) -> str:
 # ---------------------------------------------------------------------------
 # Tab 1b: ETA quantiles + promise
 # ---------------------------------------------------------------------------
-def predict_eta(*inputs):
+def predict_eta(
+    distance_miles: float,
+    service_level: str,
+    origin_hub_congestion: float,
+    dest_hub_congestion: float,
+    dest_weather_severity: int,
+    minutes_after_cutoff: float,
+    is_peak_season: bool,
+    is_rural_dest: bool,
+    dest_type: str,
+):
+    """Predict one parcel's transit time as a P10/P50/P90 quantile interval.
+
+    Same induction-time inputs as score_commit. Returns a markdown summary with
+    the median ETA, the honest P10-P90 range, and the promise (ceil of P90 —
+    the transit days you can quote and keep ~9 times in 10), plus an interval
+    chart.
+    """
     models = _eta_models()
-    raw = _raw_row(*inputs)
+    raw = _raw_row(
+        distance_miles, service_level, origin_hub_congestion, dest_hub_congestion,
+        dest_weather_severity, minutes_after_cutoff, is_peak_season, is_rural_dest,
+        dest_type,
+    )
     clean, _ = eta_cleaning.clean(raw)
     X = eta_features.to_matrix(eta_features.engineer(clean))
     X = X.reindex(columns=models.feature_columns, fill_value=0.0)
@@ -330,6 +377,14 @@ _POLICY_LABELS = {
 
 
 def run_budget(budget: float):
+    """Allocate a daily intervention budget across 20,000 at-risk shipments.
+
+    Compares five policies at the given budget (USD, 1000-20000): do nothing,
+    random spend, flag-the-riskiest (top-K), expected-value greedy, and a
+    perfect-scores oracle. Returns a markdown takeaway, a net-savings chart,
+    and the full policy comparison table (spend, misses prevented, cost
+    avoided, net savings, ROI, % of oracle).
+    """
     import tempfile
 
     df = _iv_day()

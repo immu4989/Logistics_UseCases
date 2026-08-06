@@ -2,7 +2,7 @@
 # from the GitHub repo (pip supports subdirectory installs), so the Space stays
 # in sync with the source and needs no vendored copies. Pin to a tag/commit for
 # reproducibility once you cut a release.
-gradio>=5,<6
+gradio[mcp]>=5,<6
 
 # Pinned to match the pre-trained models/ shipped with the Space (built by
 # build_models.py). Pickled XGBoost/scikit-learn objects load reliably only on

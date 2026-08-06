@@ -31,13 +31,28 @@ data behind this Space, and the numbers reproduce the repository's tests. Models
 trained small for a fast demo (cold start ~20s while they build, then cached); the repo's
 headline numbers come from full runs.
 
+## 🔌 Agents can call these models too (MCP)
+
+The Space doubles as an **MCP server**: the three functions are exposed as tools with
+typed schemas, so any MCP-capable agent (Claude, or your own) can score shipments,
+pull ETA intervals, and run the budget allocator programmatically.
+
+```
+https://immu4989-logistics-usecases-demo.hf.space/gradio_api/mcp/
+```
+
+Tools: `score_commit`, `predict_eta`, `run_budget` — parameter names and descriptions
+come straight from [logic.py](logic.py)'s signatures and docstrings. Point an MCP
+client at the URL above (streamable HTTP transport) and the tools appear; no auth
+needed for this public demo.
+
 ## Running locally
 
 ```bash
 cd demo
 python3.12 -m venv .venv
 .venv/bin/pip install -e ../delivery-commit-prediction -e ../eta-regression \
-                      -e ../intervention-optimization "gradio>=5,<6"
+                      -e ../intervention-optimization "gradio[mcp]>=5,<6"
 .venv/bin/python app.py
 ```
 
