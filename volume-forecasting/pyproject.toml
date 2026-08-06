@@ -33,6 +33,10 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0", "ruff>=0.4"]
+# Foundation-model benchmark (README section "Foundation models vs gradient
+# boosting"). Deliberately NOT in default deps: torch is a ~200MB wheel and
+# neither CI nor the core pipeline needs it.
+fm = ["chronos-forecasting>=1.4", "torch>=2.3"]
 
 [project.scripts]
 volume-forecast = "volume_forecasting.cli:main"

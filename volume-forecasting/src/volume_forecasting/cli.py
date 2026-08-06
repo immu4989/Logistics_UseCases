@@ -2,6 +2,8 @@
 
     volume-forecast generate --out artifacts/data/raw.csv   # synthetic raw feed
     volume-forecast all                                     # full pipeline
+    volume-forecast fm-bench                                # Chronos-Bolt vs XGBoost
+                                                            # (needs: pip install -e ".[fm]")
 
 Artifacts land in ./artifacts by default:
     artifacts/data/      raw + cleaned tables
@@ -79,6 +81,48 @@ def cmd_all(args) -> None:
     print(f"\ndone. reports -> {report_dir}")
 
 
+def cmd_fm_bench(args) -> None:
+    try:
+        import chronos  # noqa: F401
+    except ImportError:
+        print(
+            "error: the foundation-model benchmark needs the optional 'fm' extra "
+            "(kept out of the default install because torch is a ~200MB wheel):\n"
+            '    pip install -e ".[fm]"',
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    from . import fm_benchmark
+
+    keys = tuple(k.strip() for k in args.models.split(",") if k.strip())
+    unknown = [k for k in keys if k not in fm_benchmark.CHRONOS_MODELS]
+    if unknown:
+        print(
+            f"error: unknown model(s) {unknown}; "
+            f"choose from {sorted(fm_benchmark.CHRONOS_MODELS)}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    results = fm_benchmark.run_benchmark(keys, artifacts=args.artifacts, seed=args.seed)
+    acc = results["accuracy"]
+    print(f"\n      {'':<20} {'WAPE':>7} {'peak WAPE':>10} {'bias':>7} {'P10-P90 cov':>12}")
+    for name in ["seasonal_naive", "xgboost", *[f"chronos_bolt_{k}" for k in keys]]:
+        cov = acc[name].get("coverage_p10_p90")
+        cov_str = f"{cov:>11.1%}" if cov is not None else f"{'-':>11}"
+        print(
+            f"      {name:<20} {acc[name]['overall']['wape']:>6.1%} "
+            f"{acc[name]['peak_season']['wape']:>9.1%} "
+            f"{acc[name]['overall']['bias']:>+6.1%} {cov_str}"
+        )
+    for name, wl in results["per_hub_wins_vs_xgboost"].items():
+        print(
+            f"      per-hub WAPE: {name} wins {wl['chronos_wins']}, "
+            f"XGBoost wins {wl['xgboost_wins']} of {len(results['per_hub'])} hubs"
+        )
+
+
 def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(prog="volume-forecast", description=__doc__)
     sub = p.add_subparsers(dest="command", required=True)
@@ -93,6 +137,15 @@ def main(argv: list[str] | None = None) -> None:
     a.add_argument("--seed", type=int, default=7)
     a.add_argument("--artifacts", default="artifacts")
     a.set_defaults(func=cmd_all)
+
+    f = sub.add_parser(
+        "fm-bench",
+        help='zero-shot Chronos-Bolt vs XGBoost on the held-out window (pip install -e ".[fm]")',
+    )
+    f.add_argument("--models", default="tiny,small", help="comma-separated: tiny,small")
+    f.add_argument("--seed", type=int, default=7)
+    f.add_argument("--artifacts", default="artifacts")
+    f.set_defaults(func=cmd_fm_bench)
 
     args = p.parse_args(argv)
     try:

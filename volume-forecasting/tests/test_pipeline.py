@@ -8,11 +8,12 @@ surfaces the real drivers and buries the planted noise). If a refactor breaks
 feature engineering, the split, or the explanation grouping, these fail.
 """
 
+import numpy as np
 import pandas as pd
 import pytest
 
-from volume_forecasting import cleaning, evaluate, explain, features, schema, synthetic
-from volume_forecasting import train as train_mod
+from volume_forecasting import cleaning, evaluate, explain, features, fm_benchmark, schema
+from volume_forecasting import synthetic, train as train_mod
 
 
 @pytest.fixture(scope="session")
@@ -156,3 +157,71 @@ def test_shap_recovers_true_drivers(trained, tmp_path):
     for noise in schema.NOISE_FEATURES:
         share = ranking.loc[ranking["feature"] == noise, "share_of_explanation"].iloc[0]
         assert share < 0.01, f"planted noise feature {noise} got {share:.1%} of the explanation"
+
+
+# ---------------------------------------------------------------------------
+# Foundation-model benchmark (fm_benchmark.py). The metric path is torch-free
+# by design and is tested everywhere; the model-invocation test skips cleanly
+# wherever the optional fm extra is not installed (CI never installs torch).
+# ---------------------------------------------------------------------------
+
+
+def test_fm_metrics_computation_without_chronos():
+    """Metric computation is hand-checkable and must not need torch/chronos.
+
+    The quantile frame stands in for a mocked model output; every expected
+    value below is computed by hand from evaluate.py's definitions.
+    """
+    actual = np.array([100.0, 200.0, 300.0, 400.0])
+    q = pd.DataFrame(
+        {
+            "p10": [90.0, 180.0, 270.0, 380.0],
+            "p50": [100.0, 210.0, 290.0, 410.0],
+            "p80": [110.0, 220.0, 310.0, 430.0],
+            "p90": [120.0, 230.0, 330.0, 450.0],
+        }
+    )
+    peak = np.array([False, False, True, True])
+    m = fm_benchmark.compute_fm_metrics(actual, q, peak)
+
+    # WAPE = (0+10+10+10)/1000; bias = (0+10-10+10)/1000; peak WAPE = 20/700.
+    assert m["overall"]["wape"] == pytest.approx(0.03)
+    assert m["overall"]["bias"] == pytest.approx(0.01)
+    assert m["peak_season"]["wape"] == pytest.approx(20 / 700)
+    # Pinball by hand: p10 diffs all positive -> mean(0.1*[10,20,30,20]) = 2.0;
+    # p50 -> mean(|d|/2) = 3.75; p90 diffs all negative -> mean(0.1*|d|) = 3.25.
+    assert m["pinball"]["p10"] == pytest.approx(2.0)
+    assert m["pinball"]["p50"] == pytest.approx(3.75)
+    assert m["pinball"]["p90"] == pytest.approx(3.25)
+    # Every actual lies inside its P10-P90 band.
+    assert m["coverage_p10_p90"] == 1.0
+    assert m["coverage_p10_p90_peak"] == 1.0
+
+
+def test_chronos_rolling_forecast_shape_and_monotone_quantiles():
+    """One hub-week through the real model: shapes, finiteness, no crossed quantiles."""
+    pytest.importorskip("chronos")
+
+    rng = np.random.default_rng(0)
+    idx = pd.date_range("2025-01-01", periods=90, freq="D")
+    wide = pd.DataFrame(
+        {
+            "MEM": 50_000 + 5_000 * np.sin(np.arange(90) / 7) + rng.normal(0, 500, 90),
+            "CLT": 1_800 + 200 * np.sin(np.arange(90) / 7) + rng.normal(0, 50, 90),
+        },
+        index=idx,
+    )
+    wide.iloc[40:43, 0] = np.nan  # a feed gap; contexts must tolerate it
+
+    pipeline = fm_benchmark.load_pipeline(fm_benchmark.CHRONOS_MODELS["tiny"])
+    test_dates = idx[-7:]
+    fm = fm_benchmark.rolling_forecast(pipeline, wide, test_dates, progress=False)
+
+    assert len(fm) == 7 * 2  # every hub, every test day
+    assert set(fm.columns) == {schema.DATE_COL, schema.HUB_COL, "p10", "p50", "p80", "p90"}
+    assert fm[["p10", "p50", "p80", "p90"]].notna().all().all()
+    assert (fm["p10"] <= fm["p50"]).all()
+    assert (fm["p50"] <= fm["p80"]).all()
+    assert (fm["p80"] <= fm["p90"]).all()
+    # Sanity of scale: day-ahead P50 for the superhub is in the tens of thousands.
+    assert fm.loc[fm[schema.HUB_COL] == "MEM", "p50"].between(20_000, 100_000).all()

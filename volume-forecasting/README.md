@@ -95,6 +95,73 @@ terciles), so small hubs are not paying for the big ones:
 
 ![WAPE by hub](docs/img/wape_by_hub.png)
 
+## 🤖 Foundation models vs gradient boosting
+
+The loudest current argument in forecasting is whether a pretrained time-series
+foundation model — hand it raw history, get quantiles back, no features, no training —
+makes a tuned pipeline like the one above obsolete. This repo can answer for its own
+data instead of arguing by blog post: Amazon's **Chronos-Bolt** (tiny and small),
+zero-shot on CPU, scored on the *identical* held-out window as everything else. The
+protocol is the honest one, rolling-origin day-ahead: for every test day, the context
+is the actual cleaned history up to the day before (feed gaps stay NaN; Chronos masks
+missing values natively), the model predicts one step, and no forecast is ever fed
+back in as history. All 15 hubs batch into one model call per day, so the full
+protocol — 120 days x 15 hubs x 2 models — takes about 7 seconds of model time on a
+laptop CPU.
+
+| | Seasonal naive | XGBoost (P50 + band) | Chronos-Bolt tiny | Chronos-Bolt small |
+|---|---:|---:|---:|---:|
+| WAPE, overall | 16.2% | **7.5%** | 28.3% | 13.6% |
+| WAPE, peak season (Nov 20 – Dec 22) | 17.8% | **7.1%** | 34.5% | 20.3% |
+| Bias, peak season | -9.3% | **-1.2%** | -14.0% | -13.0% |
+| Pinball loss, P10 / P50 / P90 (parcels) | — | **274 / 634 / 286** | 1268 / 2391 / 962 | 713 / 1152 / 684 |
+| P10–P90 coverage, overall (nominal 80%) | — | 80.5% | 75.6% | 84.2% |
+| P10–P90 coverage, peak season | — | **80.5%** | 61.4% | 62.5% |
+
+Per-hub WAPE: **XGBoost wins 15 of 15 hubs** against both Chronos sizes; the closest
+any hub gets is still roughly a 2x error gap. But read the middle columns fairly,
+both ways. Chronos-Bolt small, which has never seen a parcel network, beats the
+seasonal naive overall (13.6% vs 16.2%) and its overall interval is honestly
+calibrated (84.2% against the 80% nominal) — that is a real forecast from nothing but
+a column of history, no feature pipeline, no training run. Bolt-tiny is a caution
+instead: it cannot hold this data's 19:1 weekly amplitude (in a spot check it put a
+Sunday at 40k parcels against an actual of 5.8k) and lands *worse than the
+spreadsheet*, so "a foundation model" is not one thing — size matters.
+
+![XGBoost vs Chronos-Bolt through the December peak](docs/img/fm_vs_xgb.png)
+
+The overlay shows where the gap lives. Chronos-small tracks the weekly rhythm well
+through the quiet months, then December arrives and every orange peak sits below the
+black one: peak-season bias -13.0%, nearly identical to the naive's -9.3%, while
+coverage collapses to 62% in exactly the weeks a staffing plan leans on the band. And
+the mid-October flash sale that XGBoost catches from the published promo calendar is
+invisible to Chronos — a promo spike simply does not exist in the history it
+conditions on.
+
+That is the actual industry tradeoff, stated both ways. Chronos is univariate and
+zero-shot: it never saw the promo calendar, the holiday table, or a peak-ramp flag —
+the covariates XGBoost gets as features — and no amount of pattern-matching on raw
+history can forecast an event that is only announced in a marketing calendar. XGBoost,
+in turn, needed everything Chronos skips: a feature pipeline, documented holiday and
+promo tables, a log-ratio target, tuning, and conformal calibration. A zero-shot FM is
+the right call when that apparatus doesn't exist yet — cold-start series, hundreds of
+heterogeneous series nobody will hand-feature, a credible forecast needed this
+afternoon. The GBM earns its keep the moment the future is partly *known* — promos,
+holidays, peak ramps — because known-future covariates are precisely what a
+history-only model cannot see, and this data (like most retail-adjacent volume) puts
+its money weeks on exactly those days.
+
+Reproduce it (torch is a ~200MB wheel, which is why this is an optional extra and not
+a default dependency — the core pipeline and CI never install it):
+
+```bash
+pip install -e ".[fm]"
+volume-forecast fm-bench            # ~1 minute total; models download from HF Hub
+```
+
+Outputs land next to the standard reports: `artifacts/reports/fm_benchmark.json`,
+`fm_comparison.csv`, and the overlay above.
+
 ## 🔍 What actually drives tomorrow's volume
 
 SHAP on the P50 model. The weekly rhythm dominates, exactly as the generative process
@@ -223,7 +290,10 @@ src/volume_forecasting/
                  understaffed-days table, overlay and coverage plots
   explain.py     SHAP on the P50 model: beeswarm, lever-grouped ranking,
                  dependence plots
-  cli.py         volume-forecast generate | all
+  fm_benchmark.py  zero-shot Chronos-Bolt (tiny + small) vs XGBoost on the
+                 same held-out window, rolling-origin day-ahead; optional
+                 "fm" extra so torch never enters the default install
+  cli.py         volume-forecast generate | all | fm-bench
 tests/           end-to-end tests incl. "beats the seasonal naive", honest
                  coverage, and "SHAP recovers the true drivers"
 ```
